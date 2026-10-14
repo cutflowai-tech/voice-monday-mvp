@@ -196,6 +196,23 @@ async def test_ari_channel_say_listen_and_hangup_event():
         await channel.listen(max_seconds=10, max_silence_seconds=2)
 
 
+async def test_ready_cue_starts_only_after_first_recording_is_active():
+    bus = AriEventBus()
+    ari = FakeAri(bus)
+    channel = AriCallChannel(
+        ari=ari,
+        bus=bus,
+        channel={"id": "c1"},
+        speech=StaticRenderer(),
+        ready_cue_media="sound:voice-monday/ready",
+    )
+    await channel.listen(max_seconds=10, max_silence_seconds=2)
+    assert [r[0] for r in ari.requests[:2]] == ["record", "play"]
+    assert ari.requests[1][1] == "sound:voice-monday/ready"
+    await channel.listen(max_seconds=10, max_silence_seconds=2)
+    assert sum(r[0] == "play" for r in ari.requests) == 1
+
+
 async def test_ari_channel_does_not_beep_when_tts_fails():
     class BrokenRenderer:
         async def render(self, text):

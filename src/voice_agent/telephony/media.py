@@ -4,7 +4,7 @@ Two delivery modes:
 
 * ``file`` (recommended): audio is written as raw signed-linear (``.sln16``) into a
   directory Asterisk can read (same host, bind mount or network share). It is
-  played with ``sound:<absolute path without extension>``, which ARI supports on
+  played with ``sound:<path relative to Asterisk's sounds directory>``, which ARI supports on
   every Asterisk version.
 * ``http`` (experimental): audio is written as 8 kHz WAV and served by the API at
   ``/media/<name>.wav``; Asterisk fetches it via ``res_http_media_cache``. ARI

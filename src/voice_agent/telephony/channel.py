@@ -61,6 +61,7 @@ class AriCallChannel(CallChannel):
         bus: AriEventBus,
         channel: dict[str, Any],
         speech: SpeechRenderer,
+        ready_cue_media: str | None = None,
     ):
         self.ari = ari
         self.bus = bus
@@ -68,6 +69,7 @@ class AriCallChannel(CallChannel):
         self.call_id = self.channel_id
         self.caller = (channel.get("caller") or {}).get("number", "")
         self.speech = speech
+        self.ready_cue_media = ready_cue_media
         self._hangup = asyncio.Event()
         self._turn = 0
         bus.on_channel(self.channel_id, self._on_channel_event)
@@ -148,6 +150,12 @@ class AriCallChannel(CallChannel):
                 max_silence_seconds=max_silence_seconds,
             )
             log.info("call.recording_started", call_id=self.call_id, turn=self._turn)
+            if self._turn == 1 and self.ready_cue_media and self.active:
+                try:
+                    await self.ari.play(self.channel_id, self.ready_cue_media, uuid.uuid4().hex)
+                    log.info("call.ready_cue_started", call_id=self.call_id)
+                except AriError as exc:
+                    log.warning("call.ready_cue_failed", call_id=self.call_id, error=str(exc))
             finished = await self._wait(future, wait_seconds=max_seconds + 10)
             if not finished and not self.active:
                 # Caller hung up mid-sentence: give Asterisk a moment to store the file.

@@ -5,10 +5,11 @@ The observed host on 2026-10-14 is `wcds@192.168.0.118`, running plain Asterisk
 assistant route is 7999 in `voice-monday-test`. No `Answer()` or playback is in
 the assistant dialplan. Extension 777 was unused when inspected.
 
-The ARI service warms Whisper before connecting to the Stasis application. For
-each call it checks the channel while it rings, then answers and starts recording
-without a greeting or beep. Asterisk's channel recording captures incoming audio
-only. The short answer-to-record transition remains to be measured with a handset.
+The ARI service warms Whisper and pre-renders a short "معاك" cue before connecting
+to the Stasis application. For each call it checks the channel while it rings,
+then answers and starts recording before playing the cue. Asterisk's channel
+recording captures incoming audio only, so callers can begin speaking as the cue
+plays. The short answer-to-record transition remains to be measured with a handset.
 
 This host binds ARI and Redis only to `127.0.0.1`. Copy
 `deploy/asterisk-host.override.yml` to `docker-compose.override.yml` on the host;

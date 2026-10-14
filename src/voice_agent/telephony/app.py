@@ -33,9 +33,14 @@ class AriApplication:
         self.shutdown_grace_seconds = shutdown_grace_seconds
         self.sessions: dict[str, asyncio.Task] = {}
         self._draining = False
+        self.ready_cue_media: str | None = None
 
     async def run(self, stop: asyncio.Event) -> None:
         info = await self.ari.info()
+        try:
+            self.ready_cue_media = await self.speech.render("معاك")
+        except Exception as exc:
+            log.warning("ari.ready_cue_unavailable", error=repr(exc))
         log.info(
             "ari.ready",
             app=self.ari.app,
@@ -70,7 +75,13 @@ class AriApplication:
             caller=(channel.get("caller") or {}).get("number"),
             exten=(channel.get("dialplan") or {}).get("exten"),
         )
-        call = AriCallChannel(ari=self.ari, bus=self.bus, channel=channel, speech=self.speech)
+        call = AriCallChannel(
+            ari=self.ari,
+            bus=self.bus,
+            channel=channel,
+            speech=self.speech,
+            ready_cue_media=self.ready_cue_media,
+        )
         task = asyncio.create_task(self._run_call(call), name=f"call-{channel_id}")
         self.sessions[channel_id] = task
 
