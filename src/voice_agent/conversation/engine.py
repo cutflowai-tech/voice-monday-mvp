@@ -152,10 +152,21 @@ class ConversationEngine:
                 and parse.intent.action is Action.CREATE_TASK
                 and bool(parse.intent.details.assignee_key and parse.intent.task)
             )
+            clear_missing_task = (
+                state.pending is None
+                and parse.status == "incomplete"
+                and parse.confidence >= 0.9
+                and parse.intent is not None
+                and parse.intent.action is Action.CREATE_TASK
+                and bool(parse.intent.details.assignee_key)
+                and not parse.intent.task
+                and parse.missing == ["task"]
+            )
             if (
                 self.agent
                 and not unknown_spoken_assignee
                 and not clear_task
+                and not clear_missing_task
                 and not (parse.status == "ok" and parse.confidence >= 0.99)
             ):
                 reply = await self._dispatch_agent(state, text, idempotency_key)
