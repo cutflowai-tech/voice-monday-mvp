@@ -32,7 +32,20 @@ For this host, keep the old 7999 route until a real call to 777 succeeds. Backup
 of the prior code, `.env`, and dialplan are stored privately under
 `/home/wcds/voice-monday-backups/`. The `.env` backup must never be committed.
 
-Rollback: stop only the `ari` Compose service, restore the matching code and `.env`
-backup, restore `extensions.conf` and `extensions_voice_monday.conf` from the same
-dated directory, run `sudo asterisk -rx 'dialplan reload'`, then start the prior
-`ari` service. Do not stop Redis or the worker; durable jobs continue processing.
+Rollback for this deployment (from `/home/wcds/voice-monday-mvp`):
+
+```sh
+backup=/home/wcds/voice-monday-backups/20261014T185352Z
+sudo docker compose --profile telephony stop ari api worker
+tar -xzf "$backup/code-before.tar.gz" -C .
+cp "$backup/env-before" .env
+sudo cp "$backup/extensions.conf-before" /etc/asterisk/extensions.conf
+sudo cp "$backup/extensions_voice_monday.conf-before" /etc/asterisk/extensions_voice_monday.conf
+rm -f docker-compose.override.yml
+sudo asterisk -rx 'dialplan reload'
+sudo docker tag voice-monday-agent:before-1a3a304 voice-monday-agent:latest
+sudo docker compose --profile telephony up -d --no-deps --no-build api worker ari
+```
+
+Redis and its persisted queue are untouched. The backup restores the exact
+pre-deployment application and PBX configuration, including its older audio setup.
