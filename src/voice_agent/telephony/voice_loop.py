@@ -54,6 +54,7 @@ class VoiceLoop:
         self.failures = 0
         self.end_reason: EndReason | None = None
         self.reject_unknown_caller = False
+        self._working_cue_sent = False
 
     async def run(self) -> EndReason:
         started = self.clock()
@@ -117,12 +118,6 @@ class VoiceLoop:
             if audio is None:
                 continue  # silence; inactivity timer keeps running
             utterance_ended_at = time.monotonic()
-            try:
-                await self.channel.working()
-            except Exception as exc:
-                log.warning(
-                    "call.working_cue_failed", call_id=self.channel.call_id, error=repr(exc)
-                )
 
             try:
                 transcript = await self.stt.transcribe(audio, language=self.config.language)
@@ -133,6 +128,14 @@ class VoiceLoop:
             if not text:
                 continue
             log.info("call.heard", call_id=self.channel.call_id, text=text)
+            if not self._working_cue_sent and len(text.split()) >= 3:
+                try:
+                    await self.channel.working()
+                    self._working_cue_sent = True
+                except Exception as exc:
+                    log.warning(
+                        "call.working_cue_failed", call_id=self.channel.call_id, error=repr(exc)
+                    )
 
             # The engine persists accepted jobs before returning; that work completes
             # even if the caller hangs up while it runs.

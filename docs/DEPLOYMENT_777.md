@@ -10,9 +10,10 @@ to the Stasis application. For each call it checks the channel while it rings,
 then answers and starts recording before playing the cue. Asterisk's channel
 recording captures incoming audio only, so callers can begin speaking as the cue
 plays. The short answer-to-record transition remains to be measured with a handset.
-After an utterance is recorded, a pre-rendered "سمعتك، لحظة" receipt cue starts
-while recognition and task handling proceed. The final answer cancels any
-unfinished receipt cue before it plays.
+After the first substantive utterance is transcribed, a short pre-rendered
+"تمام، ثانية واحدة" cue plays once per call while the request is handled. Silence
+and one-word fragments do not trigger it. The final answer cancels any unfinished
+cue before it plays.
 
 This host binds ARI and Redis only to `127.0.0.1`. Copy
 `deploy/asterisk-host.override.yml` to `docker-compose.override.yml` on the host;
@@ -25,6 +26,10 @@ extensions to keys in `people.json`, for example `{"101": "ahmed"}` **only if th
 owner has verified that assignment**. The default policy records an unknown
 requester; `UNKNOWN_CALLER_POLICY=reject` rejects unmatched callers. Caller ID is
 attribution rather than authentication. The assignee is always resolved separately.
+The board's `Task From` People column is `person`. Extension 102 maps to `ahmed`,
+whose verified Monday user is Ahmed Samy (`103082849`), so its new tasks populate
+that column. Other extensions retain requester metadata until their Monday user
+mapping is confirmed.
 
 `AGENT_API_KEY` enables a strict structured decision using the provider selected by
 `AGENT_PROVIDER` (`openai` Responses or `openrouter` chat completions) and `AGENT_MODEL`.

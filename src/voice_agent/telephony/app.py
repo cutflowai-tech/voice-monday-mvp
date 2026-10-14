@@ -40,7 +40,7 @@ class AriApplication:
         info = await self.ari.info()
         try:
             self.ready_cue_media = await self.speech.render("معاك")
-            self.working_cue_media = await self.speech.render("سمعتك، لحظة")
+            self.working_cue_media = await self.speech.render("تمام، ثانية واحدة")
         except Exception as exc:
             log.warning("ari.ready_cue_unavailable", error=repr(exc))
         log.info(

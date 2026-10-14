@@ -96,7 +96,7 @@ async def test_call_stays_active_after_task_and_accepts_more(container, worker, 
     assert reason == "caller_hangup"
     assert channel.answered and not channel.hung_up_by_agent
     assert len(channel.said) == 2
-    assert channel.working_cues == 2
+    assert channel.working_cues == 1
     assert "محمد" in channel.said[0] and "أحمد" in channel.said[1]
     assert len(loop.state.accepted_job_ids) == 2
 
