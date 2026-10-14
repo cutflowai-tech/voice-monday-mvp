@@ -1,9 +1,10 @@
 # Assistant extension 777
 
 The observed host on 2026-10-14 is `wcds@192.168.0.118`, running plain Asterisk
-22.5.2 and Docker Compose. Its calling context is `office-internal`; the prior
-assistant route is 7999 in `voice-monday-test`. No `Answer()` or playback is in
-the assistant dialplan. Extension 777 was unused when inspected.
+22.5.2 and Docker Compose. Its calling context is `office-internal`. Extension
+777 now routes to `Stasis(voice-monday-agent)` without an early `Answer()` or
+playback. The prior assistant route 7999 was retired after a successful handset
+call to 777 and a configuration search found no other references.
 
 The ARI service warms Whisper and pre-renders a short "معاك" cue before connecting
 to the Stasis application. For each call it checks the channel while it rings,
@@ -42,9 +43,10 @@ Without it the deterministic parser is used.
 The model can only select a conversation action, directory key, and task title.
 Application code validates and persists the job, and the worker alone calls Monday.
 
-For this host, keep the old 7999 route until a real call to 777 succeeds. Backups
-of the prior code, `.env`, and dialplan are stored privately under
-`/home/wcds/voice-monday-backups/`. The `.env` backup must never be committed.
+Backups of the prior code, `.env`, and dialplan are stored privately under
+`/home/wcds/voice-monday-backups/`. A separate
+`extensions_voice_monday_pre_retire` snapshot preserves the configuration just
+before removing 7999. The `.env` backup must never be committed.
 
 Rollback for this deployment (from `/home/wcds/voice-monday-mvp`):
 
