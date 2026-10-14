@@ -137,6 +137,30 @@ async def test_date_correction_with_ordinal_changes_only_second_task(container):
     assert container.store.status_counts() == {}
 
 
+async def test_date_correction_removes_redundant_lam_prefix(container):
+    class ReviewAgent:
+        async def decide_review(self, text, current):
+            return ReviewDecision(
+                action="draft",
+                tasks=[
+                    ReviewTask(assignee_key="mohamed", task="يأتي بعد بكرة"),
+                    ReviewTask(assignee_key="michael", task="يأتي لبكرة"),
+                ],
+                question=None,
+            )
+
+    container.engine.review_before_submit = True
+    container.engine.agent = ReviewAgent()
+    state = ConversationState()
+    await container.engine.handle(
+        state, "أريك أن تقول المحسن أنه يأتي بعد بكرة. وتقول الميكل أنه يأتي لبكرة."
+    )
+    reply = await container.engine.handle(state, "لا غلط، التاني الخميس بدل بكرة")
+    assert "يأتي الخميس" in reply.text
+    assert "لالخميس" not in reply.text
+    assert container.store.status_counts() == {}
+
+
 async def test_multiple_names_without_clear_separator_ask_or_extract(container):
     container.engine.review_before_submit = True
     reply = await container.engine.handle(

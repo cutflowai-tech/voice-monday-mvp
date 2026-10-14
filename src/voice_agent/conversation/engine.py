@@ -398,9 +398,16 @@ class ConversationEngine:
         draft = state.review_drafts[target].model_copy(deep=True)
         if not draft.task or old_date not in draft.task:
             return None
-        draft.task = draft.task.replace(old_date, new_date, 1)
+
+        def replace_date(phrase: str) -> str:
+            prefixed = f"ل{old_date}"
+            if prefixed in phrase and (new_date.startswith("ال") or new_date.startswith("بعد ")):
+                return phrase.replace(prefixed, new_date, 1)
+            return phrase.replace(old_date, new_date, 1)
+
+        draft.task = replace_date(draft.task)
         if draft.details.action_phrase:
-            draft.details.action_phrase = draft.details.action_phrase.replace(old_date, new_date, 1)
+            draft.details.action_phrase = replace_date(draft.details.action_phrase)
         return draft
 
     async def _handle_review(
