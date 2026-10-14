@@ -193,6 +193,13 @@ class ConversationEngine:
         if decision.action == "unsupported":
             return AssistantReply(kind="unsupported", text="أقدر أضيف تاسكات بس.")
         person = self.directory.get(decision.assignee_key) if decision.assignee_key else None
+        if (
+            decision.action == "submit"
+            and person
+            and not self._assignee_was_spoken(text, person.key, state.pending)
+        ):
+            log.warning("conversation.agent_unspoken_assignee", key=person.key)
+            return AssistantReply(kind="not_understood", text=await self.acks.not_understood())
         intent = Intent(
             action=Action.CREATE_TASK,
             assignee=person.name_en if person else None,
@@ -218,6 +225,24 @@ class ConversationEngine:
                 reply.text = decision.question
             return reply
         return await self._process(state, text, intent, key)
+
+    def _assignee_was_spoken(self, text: str, key: str, pending: Pending | None) -> bool:
+        if pending and pending.intent.details.assignee_key == key:
+            return True
+        person = self.directory.get(key) if self.directory else None
+        if person is None:
+            return False
+        words = normalize_text(text).split()
+        for alias in (person.name_ar, person.name_en, *person.aliases):
+            parts = normalize_text(alias).split()
+            if not parts:
+                continue
+            for i in range(len(words) - len(parts) + 1):
+                candidate = words[i : i + len(parts)]
+                with_lam = candidate[0] == "ل" + parts[0] and candidate[1:] == parts[1:]
+                if candidate == parts or with_lam:
+                    return True
+        return False
 
     async def _correct_saved(
         self, state: ConversationState, text: str, key: str | None

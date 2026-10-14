@@ -15,7 +15,7 @@ Caller ──► Asterisk ──(dialplan: test extension only)──► Stasis(
                                        faster-whisper → parser → durable job → ElevenLabs
                                        writes .sln16 into the shared sounds folder
                                                               │
-Asterisk plays  sound:/var/lib/asterisk/sounds/voice-monday/<file>  ◄──┘
+Asterisk plays  sound:voice-monday/<file>  ◄──┘
 ```
 
 * The agent connects **outbound** to Asterisk's ARI (HTTP + WebSocket, port 8088 by default).
@@ -122,15 +122,15 @@ The agent container runs as UID/GID **10001**. Asterisk only needs to *read* the
 (they are written with mode 0644):
 
 ```bash
-sudo install -d -m 0755 -o 10001 -g 10001 /var/lib/asterisk/sounds/voice-monday
+sudo install -d -m 0755 -o 10001 -g 10001 /usr/share/asterisk/sounds/voice-monday
 ```
 
 and in `.env`:
 
 ```bash
 ASTERISK_PLAYBACK_MODE=file
-ASTERISK_SOUNDS_HOST_DIR=/var/lib/asterisk/sounds/voice-monday   # mounted into the container
-ASTERISK_SOUNDS_URI_PREFIX=/var/lib/asterisk/sounds/voice-monday  # path as Asterisk sees it
+ASTERISK_SOUNDS_HOST_DIR=/usr/share/asterisk/sounds/voice-monday  # host astdatadir/sounds
+ASTERISK_SOUNDS_URI_PREFIX=voice-monday  # relative to Asterisk sounds directory
 ```
 
 If the agent runs on a different machine, the same folder must be shared (NFS/SMB) so that
@@ -215,5 +215,5 @@ Other extensions are untouched throughout: only calls to the test extension ente
 4. Undo any `http.conf` change you made in 3a (or restore from the backup).
 5. Reload: `asterisk -rx "dialplan reload"`, `asterisk -rx "module reload res_ari.so"`,
    and `asterisk -rx "module reload http"` if you changed http.conf.
-6. Optionally `sudo rm -r /var/lib/asterisk/sounds/voice-monday`.
+6. Optionally `sudo rm -r /usr/share/asterisk/sounds/voice-monday`.
 7. Confirm: `asterisk -rx "dialplan show 777@from-internal"` reports no such extension.

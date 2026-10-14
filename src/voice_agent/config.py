@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # Where the app writes generated audio, and how Asterisk refers to that folder.
     asterisk_playback_mode: Literal["file", "http"] = "file"
     asterisk_sounds_dir: str = "data/sounds"
-    asterisk_sounds_uri_prefix: str = "/var/lib/asterisk/sounds/voice-monday"
+    asterisk_sounds_uri_prefix: str = "voice-monday"
     public_media_base_url: str = ""
     record_max_seconds: int = Field(default=20, ge=3, le=120)
     record_max_silence_seconds: int = Field(default=2, ge=1, le=10)

@@ -48,6 +48,17 @@ async def test_agent_cannot_guess_an_unknown_spoken_assignee(container):
     assert container.store.status_counts() == {}
 
 
+async def test_agent_cannot_create_task_from_audio_diagnostic(container):
+    class GuessingAgent:
+        async def decide(self, text, pending):
+            return AgentDecision(action="submit", assignee_key="mohamed", task=text, question=None)
+
+    container.engine.agent = GuessingAgent()
+    reply = await container.engine.handle(ConversationState(), "اختبار الصوت 1 2 3")
+    assert reply.kind == "not_understood"
+    assert container.store.status_counts() == {}
+
+
 async def test_same_utterance_correction_preserves_task_details(container):
     reply = await container.engine.handle(
         ConversationState(), "حطي لمحمد يشتري هارد اتنين تيرا، لا قصدي أحمد"
