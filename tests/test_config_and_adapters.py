@@ -196,7 +196,7 @@ async def test_ari_channel_say_listen_and_hangup_event():
         await channel.listen(max_seconds=10, max_silence_seconds=2)
 
 
-async def test_ari_channel_plays_fallback_when_tts_fails():
+async def test_ari_channel_does_not_beep_when_tts_fails():
     class BrokenRenderer:
         async def render(self, text):
             raise RuntimeError("ElevenLabs down")
@@ -205,7 +205,7 @@ async def test_ari_channel_plays_fallback_when_tts_fails():
     ari = FakeAri(bus)
     channel = AriCallChannel(ari=ari, bus=bus, channel={"id": "c1"}, speech=BrokenRenderer())
     assert await channel.say("أهلاً") is False
-    assert ("play", "sound:beep") in ari.requests
+    assert not any(request[0] == "play" for request in ari.requests)
 
 
 # ------------------------------------------------------------------ STT audio decoding

@@ -83,6 +83,9 @@ class AriClient:
     async def answer(self, channel_id: str) -> None:
         await self._request("POST", f"/channels/{quote(channel_id)}/answer")
 
+    async def get_channel(self, channel_id: str) -> dict[str, Any]:
+        return (await self._request("GET", f"/channels/{quote(channel_id)}")).json()
+
     async def hangup(self, channel_id: str, reason: str = "normal") -> None:
         await self._request(
             "DELETE", f"/channels/{quote(channel_id)}", params={"reason": reason}, ok_404=True

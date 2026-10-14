@@ -15,10 +15,11 @@ hang up safely once they hear it.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
 
@@ -26,7 +27,7 @@ from voice_agent.ack.base import AcknowledgmentGenerator
 from voice_agent.commands.base import CommandHandler, CommandRegistry
 from voice_agent.connectors.base import ConnectorRegistry
 from voice_agent.conversation.session_log import SessionLog
-from voice_agent.domain.intents import Action, Intent, ParseResult
+from voice_agent.domain.intents import Action, Intent, IntentDetails, ParseResult
 from voice_agent.jobs.models import Job
 from voice_agent.jobs.service import JobService, make_idempotency_key
 from voice_agent.logging_setup import get_logger
@@ -34,6 +35,10 @@ from voice_agent.nlu.base import IntentParser
 from voice_agent.nlu.normalize import normalize_text
 
 log = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from voice_agent.conversation.agent import StructuredTaskAgent
+    from voice_agent.domain.people import PeopleDirectory
 
 MAX_UTTERANCE_CHARS = 1000
 MAX_CLARIFICATION_ROUNDS = 2
@@ -75,6 +80,8 @@ class ConversationState:
 
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     call_id: str | None = None
+    caller_number: str | None = None
+    requester_key: str | None = None
     turn: int = 0
     pending: Pending | None = None
     accepted_job_ids: list[str] = field(default_factory=list)
@@ -93,6 +100,8 @@ class ConversationEngine:
         connectors: ConnectorRegistry,
         jobs: JobService,
         session_log: SessionLog | None = None,
+        agent: StructuredTaskAgent | None = None,
+        directory: PeopleDirectory | None = None,
     ):
         self.parser = parser
         self.acks = acks
@@ -100,6 +109,8 @@ class ConversationEngine:
         self.connectors = connectors
         self.jobs = jobs
         self.session_log = session_log
+        self.agent = agent
+        self.directory = directory
 
     async def handle(
         self,
@@ -115,8 +126,22 @@ class ConversationEngine:
             return AssistantReply(kind="not_understood", text=await self.acks.not_understood())
 
         parse = await self.parser.parse(text)
+        correction = re.split(r"(?:،|,)?\s*(?:لا\s+قصدي|مش\s+.+?\s+قصدي)\s+", text, maxsplit=1)
+        if len(correction) == 2 and correction[0].strip():
+            base = await self.parser.parse(correction[0])
+            revised = await self.parser.parse_person(correction[1])
+            if base.intent and base.intent.action is Action.CREATE_TASK and revised.intent:
+                intent = base.intent.model_copy(deep=True)
+                intent.assignee = revised.intent.assignee
+                intent.details.assignee_key = revised.intent.details.assignee_key
+                intent.details.assignee_spoken = revised.intent.details.assignee_spoken
+                intent.details.assignee_gender = revised.intent.details.assignee_gender
+                parse = ParseResult(status="ok", intent=intent, confidence=base.confidence)
         try:
-            reply = await self._dispatch(state, text, parse, idempotency_key)
+            if self.agent and not (parse.status == "ok" and parse.confidence >= 0.99):
+                reply = await self._dispatch_agent(state, text, idempotency_key)
+            else:
+                reply = await self._dispatch(state, text, parse, idempotency_key)
         except Exception:
             log.exception("conversation.error", session_id=state.session_id, turn=state.turn)
             reply = AssistantReply(kind="error", text=await self.acks.system_error())
@@ -136,12 +161,97 @@ class ConversationEngine:
         await self._audit(state, text, parse, reply)
         return reply
 
+    async def _dispatch_agent(
+        self, state: ConversationState, text: str, key: str | None
+    ) -> AssistantReply:
+        normalized = normalize_text(text)
+        if normalized in {"استني", "استنى", "لحظه", "لحظة"}:
+            return AssistantReply(kind="small_talk", text="حاضر، مستنية.")
+        if re.match(r"^\s*(?:لا\s+قصدي|مش\s+.+?\s+قصدي)\b", text) and not state.pending:
+            return await self._correct_saved(state, text, key)
+        assert self.directory is not None
+        try:
+            decision = await self.agent.decide(text, state.pending)  # type: ignore[union-attr]
+        except Exception as exc:
+            log.warning("conversation.agent_fallback", error=repr(exc))
+            return await self._dispatch(state, text, await self.parser.parse(text), key)
+        if decision.action == "wait":
+            return AssistantReply(kind="small_talk", text="حاضر، مستنية.")
+        if decision.action == "discard":
+            state.pending = None
+            return AssistantReply(kind="declined", text="تمام، لغيت الطلب اللي لسه ما اتحفظش.")
+        if decision.action == "unsupported":
+            return AssistantReply(kind="unsupported", text="أقدر أضيف تاسكات بس.")
+        person = self.directory.get(decision.assignee_key) if decision.assignee_key else None
+        intent = Intent(
+            action=Action.CREATE_TASK,
+            assignee=person.name_en if person else None,
+            task=decision.task,
+            details=IntentDetails(
+                assignee_key=person.key if person else None,
+                assignee_spoken=person.name_ar if person else None,
+                assignee_gender=person.gender if person else None,
+            ),
+        )
+        if decision.action == "clarify" or not (person and decision.task):
+            missing = [
+                field
+                for field, value in (("assignee", person), ("task", decision.task))
+                if not value
+            ]
+            if not missing:
+                missing = ["assignee"]  # genuine ambiguity in a named person
+                intent.assignee = None
+                intent.details.assignee_key = None
+            reply = await self._ask(state, intent, missing, None, text)
+            if decision.question:
+                reply.text = decision.question
+            return reply
+        return await self._process(state, text, intent, key)
+
+    async def _correct_saved(
+        self, state: ConversationState, text: str, key: str | None
+    ) -> AssistantReply:
+        if not state.accepted_job_ids:
+            return AssistantReply(kind="not_understood", text="قولي الطلب كامل من فضلك.")
+        original = self.jobs.store.get(state.accepted_job_ids[-1])
+        if original is None:
+            return AssistantReply(kind="error", text=await self.acks.system_error())
+        cancelled = await self.jobs.cancel_queued(original.id)
+        if cancelled is None:
+            return AssistantReply(
+                kind="unsupported",
+                text="الطلب بدأ تنفيذه أو اتضاف بالفعل. عدّليه مباشرة في Monday.",
+            )
+        earlier = {k: v for k, v in original.intent.items() if k != "requester"}
+        intent = Intent.model_validate(earlier)
+        tail = re.sub(r"^\s*(?:لا\s+قصدي|مش\s+.+?\s+قصدي)\s*", "", text)
+        revised = await self.parser.parse_person(tail)
+        if revised.intent and revised.intent.details.assignee_key:
+            intent.assignee = revised.intent.assignee
+            intent.details.assignee_key = revised.intent.details.assignee_key
+            intent.details.assignee_spoken = revised.intent.details.assignee_spoken
+            intent.details.assignee_gender = revised.intent.details.assignee_gender
+            handler = self.commands.get(Action.CREATE_TASK)
+            assert handler is not None
+            if handler.validate(intent, self.connectors):
+                return await self._ask(state, intent, ["assignee"], "unknown_person", text)
+            return await self._accept(state, text, intent, key, [original.transcript], handler)
+        intent.assignee = None
+        intent.details.assignee_key = None
+        return await self._ask(state, intent, ["assignee"], None, text)
+
     # ------------------------------------------------------------------ dispatch
     async def _dispatch(
         self, state: ConversationState, text: str, parse: ParseResult, key: str | None
     ) -> AssistantReply:
         intent = parse.intent
         pending = state.pending
+
+        if normalize_text(text) in {"استني", "استنى", "لحظه", "لحظة"}:
+            return AssistantReply(kind="small_talk", text="حاضر، مستنية.")
+        if re.match(r"^\s*(?:لا\s+قصدي|مش\s+.+?\s+قصدي)\b", text) and not pending:
+            return await self._correct_saved(state, text, key)
 
         if pending and pending.kind == "offer":
             state.pending = None
@@ -212,14 +322,20 @@ class ConversationEngine:
         handler = handler or self.commands.get(intent.action)
         assert handler is not None
         spec = handler.build_job(intent)
+        spec.payload["requester_key"] = state.requester_key
         transcript = " | ".join([*earlier, text])
         key = key or make_idempotency_key(state.session_id, state.turn, normalize_text(transcript))
         try:
+            metadata = intent.public_dict()
+            metadata["requester"] = {
+                "person_key": state.requester_key,
+                "caller_number": state.caller_number,
+            }
             job, created = await self.jobs.submit(
                 spec,
                 idempotency_key=key,
                 transcript=transcript,
-                intent=intent.public_dict(),
+                intent=metadata,
                 session_id=state.session_id,
                 call_id=state.call_id,
             )
@@ -267,18 +383,7 @@ class ConversationEngine:
     async def _unsupported(
         self, state: ConversationState, text: str, intent: Intent
     ) -> AssistantReply:
-        for handler in self.commands.handlers():
-            offer = handler.offer_for(intent)
-            if offer and not handler.missing_fields(offer):
-                if handler.validate(offer, self.connectors):
-                    continue
-                state.pending = Pending("offer", offer, transcripts=[text])
-                return AssistantReply(
-                    kind="offer", text=await self.acks.unsupported(intent, offer), intent=intent
-                )
-        return AssistantReply(
-            kind="unsupported", text=await self.acks.unsupported(intent, None), intent=intent
-        )
+        return AssistantReply(kind="unsupported", text="أقدر أضيف تاسكات بس.", intent=intent)
 
     async def _merge(self, pending: Pending, text: str, parse: ParseResult) -> Intent | None:
         """Fill the fields we asked for from a short follow-up answer."""

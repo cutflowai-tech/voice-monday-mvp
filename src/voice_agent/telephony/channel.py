@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any
@@ -20,7 +21,6 @@ from voice_agent.telephony.media import SpeechRenderer
 log = get_logger(__name__)
 
 HANGUP_EVENTS = {"StasisEnd", "ChannelDestroyed", "ChannelHangupRequest"}
-FALLBACK_MEDIA = "sound:beep"
 
 
 class CallHungUp(Exception):
@@ -36,6 +36,10 @@ class CallChannel(ABC):
 
     @abstractmethod
     async def answer(self) -> None: ...
+
+    async def prepare(self) -> None:
+        """Check per-call prerequisites while the phone is still ringing."""
+        return None
 
     @abstractmethod
     async def say(self, text: str) -> bool:
@@ -79,6 +83,13 @@ class AriCallChannel(CallChannel):
     async def answer(self) -> None:
         await self.ari.answer(self.channel_id)
 
+    async def prepare(self) -> None:
+        if not self.active:
+            raise CallHungUp
+        # ARI recording requires an answered channel. Check its presence first,
+        # then make the answer -> record transition without intervening playback.
+        await self.ari.get_channel(self.channel_id)
+
     async def _wait(self, future: asyncio.Future, wait_seconds: float) -> bool:
         """Wait for ``future`` or hangup. Returns True if the future completed."""
         hangup = asyncio.ensure_future(self._hangup.wait())
@@ -94,15 +105,21 @@ class AriCallChannel(CallChannel):
         if not self.active:
             raise CallHungUp
         ok = True
+        started_at = time.monotonic()
         try:
             media = await self.speech.render(text)
         except Exception as exc:
             log.error("call.tts_failed", call_id=self.call_id, error=repr(exc))
-            media, ok = FALLBACK_MEDIA, False
+            return False
         playback_id = uuid.uuid4().hex
         future = self.bus.expect("playback", playback_id)
         try:
             await self.ari.play(self.channel_id, media, playback_id)
+            log.info(
+                "call.playback_started",
+                call_id=self.call_id,
+                render_and_start_ms=round((time.monotonic() - started_at) * 1000),
+            )
             # Generous upper bound: ~0.15 s per character of Arabic speech + margin.
             finished = await self._wait(future, wait_seconds=10 + len(text) * 0.15)
         except AriError as exc:

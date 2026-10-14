@@ -19,9 +19,11 @@ from voice_agent.connectors.monday import (
     MondayConfig,
     MondayGraphQLConnector,
 )
+from voice_agent.conversation.agent import StructuredTaskAgent
 from voice_agent.conversation.engine import ConversationEngine
 from voice_agent.conversation.session_log import SessionLog
 from voice_agent.db import Database
+from voice_agent.domain.callers import CallerDirectory
 from voice_agent.domain.people import PeopleDirectory
 from voice_agent.jobs.queue import JobQueue, RedisJobQueue
 from voice_agent.jobs.service import JobService
@@ -40,13 +42,17 @@ class Container:
     queue: JobQueue
     jobs: JobService
     directory: PeopleDirectory
+    callers: CallerDirectory
     parser: IntentParser
     acks: AcknowledgmentGenerator
     commands: CommandRegistry
     connectors: ConnectorRegistry
     engine: ConversationEngine
+    agent: StructuredTaskAgent | None = None
 
     async def aclose(self) -> None:
+        if self.agent:
+            await self.agent.aclose()
         await self.connectors.aclose()
         await self.queue.close()
 
@@ -63,11 +69,16 @@ def build_connectors(settings: Settings, directory: PeopleDirectory) -> Connecto
             assignee_column_type=settings.monday_assignee_column_type,
             task_name_column=settings.monday_task_name_column,
             idempotency_column=settings.monday_idempotency_column,
+            requester_column=settings.monday_requester_column,
             api_url=settings.monday_api_url,
             api_version=settings.monday_api_version,
             timeout_seconds=settings.monday_timeout_seconds,
         )
-        registry.register(MondayGraphQLConnector(config, person_ids))
+        registry.register(
+            MondayGraphQLConnector(
+                config, person_ids, requester_ids=settings.monday_requester_ids()
+            )
+        )
     else:
         # Mock mode: every directory person gets a fake id unless a real one is set.
         fake_ids = {p.key: 50_000_000 + i for i, p in enumerate(directory)}
@@ -102,10 +113,21 @@ def build_container(
     )
     jobs = JobService(store, queue, max_attempts=settings.job_max_retries + 1)
     directory = PeopleDirectory.load(settings.people_directory_file or None)
+    callers = CallerDirectory.load(settings.caller_directory_file, {p.key for p in directory})
     parser = parser or EgyptianArabicParser(directory)
     acks = acks or TemplateAcknowledgmentGenerator()
     commands = build_commands(settings)
     connectors = connectors or build_connectors(settings, directory)
+    agent = (
+        StructuredTaskAgent(
+            api_key=settings.agent_api_key,
+            model=settings.agent_model,
+            directory=directory,
+            timeout_seconds=settings.agent_timeout_seconds,
+        )
+        if settings.agent_api_key
+        else None
+    )
     engine = ConversationEngine(
         parser=parser,
         acks=acks,
@@ -113,6 +135,8 @@ def build_container(
         connectors=connectors,
         jobs=jobs,
         session_log=session_log,
+        agent=agent,
+        directory=directory,
     )
     return Container(
         settings=settings,
@@ -122,11 +146,13 @@ def build_container(
         queue=queue,
         jobs=jobs,
         directory=directory,
+        callers=callers,
         parser=parser,
         acks=acks,
         commands=commands,
         connectors=connectors,
         engine=engine,
+        agent=agent,
     )
 
 

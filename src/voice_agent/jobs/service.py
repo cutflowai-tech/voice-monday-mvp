@@ -40,6 +40,9 @@ class JobService:
         self.max_attempts = max_attempts
         self.enqueue_timeout = enqueue_timeout
 
+    async def cancel_queued(self, job_id: str) -> Job | None:
+        return await asyncio.to_thread(self.store.cancel_queued, job_id)
+
     async def submit(
         self,
         spec: JobSpec,

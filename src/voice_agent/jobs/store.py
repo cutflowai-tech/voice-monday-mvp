@@ -134,6 +134,21 @@ class JobStore:
         ]
 
     # ------------------------------------------------------------------ transitions
+    def cancel_queued(self, job_id: str) -> Job | None:
+        """Cancel only before a worker has claimed the job."""
+        now = self.clock()
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "UPDATE jobs SET status = 'failed', updated_at = ?, completed_at = ?, "
+                "last_error = 'cancelled by caller before execution' "
+                "WHERE id = ? AND status = 'queued' AND attempts = 0 RETURNING *",
+                (now, now, job_id),
+            ).fetchone()
+            if row is None:
+                return None
+            self._event(conn, job_id, JobStatus.FAILED, 0, "cancelled before execution")
+        return _row_to_job(row)
+
     def claim(self, job_id: str, lease_seconds: float) -> Job | None:
         """Take ownership of a due job (or one whose previous owner's lease expired)."""
         now = self.clock()

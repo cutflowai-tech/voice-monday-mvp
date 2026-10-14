@@ -14,6 +14,24 @@ from voice_agent.connectors.base import (
 )
 from voice_agent.connectors.monday import MondayConfig, MondayGraphQLConnector
 
+
+def test_verified_requester_goes_to_people_column_only_when_configured():
+    config = MondayConfig(
+        api_token="test",
+        board_id="1",
+        group_id="g",
+        assignee_column="assigned",
+        requester_column="person",
+    )
+    connector = MondayGraphQLConnector(config, {"mohamed": 11}, requester_ids={"ahmed": 22})
+    values = connector.column_values(
+        title="شراء هارد", person_id=11, idempotency_key="K", requester_id=22
+    )
+    assert values["person"] == {"personsAndTeams": [{"id": 22, "kind": "person"}]}
+    unknown = connector.column_values(title="شراء هارد", person_id=11, idempotency_key="K")
+    assert "person" not in unknown
+
+
 CONFIG = MondayConfig(
     api_token="test-token",
     board_id="1234567890",

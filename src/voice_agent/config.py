@@ -20,6 +20,7 @@ from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PERSON_ID_ENV = re.compile(r"^MONDAY_([A-Z0-9_]+)_PERSON_ID$")
+REQUESTER_ID_ENV = re.compile(r"^MONDAY_([A-Z0-9_]+)_REQUESTER_ID$")
 
 
 class Role(StrEnum):
@@ -50,7 +51,7 @@ class Settings(BaseSettings):
     asterisk_ari_username: str = ""
     asterisk_ari_password: str = ""
     asterisk_stasis_app: str = "voice-monday-agent"
-    asterisk_test_extension: str = ""
+    asterisk_test_extension: str = "777"
     # Where the app writes generated audio, and how Asterisk refers to that folder.
     asterisk_playback_mode: Literal["file", "http"] = "file"
     asterisk_sounds_dir: str = "data/sounds"
@@ -60,6 +61,7 @@ class Settings(BaseSettings):
     record_max_silence_seconds: int = Field(default=2, ge=1, le=10)
     call_inactivity_timeout_seconds: int = Field(default=60, ge=10, le=3600)
     call_max_consecutive_failures: int = Field(default=3, ge=1, le=10)
+    call_preparation_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
 
     # --- ElevenLabs ---------------------------------------------------------
     elevenlabs_api_key: str = ""
@@ -79,6 +81,7 @@ class Settings(BaseSettings):
     monday_assignee_column: str = ""
     monday_assignee_column_type: Literal["people", "dropdown"] = "people"
     monday_idempotency_column: str = ""
+    monday_requester_column: str = ""
     monday_timeout_seconds: float = 10.0
     mock_monday_fail_times: int = Field(default=0, ge=0)
 
@@ -109,6 +112,11 @@ class Settings(BaseSettings):
 
     # --- Misc ---------------------------------------------------------------
     people_directory_file: str = ""
+    caller_directory_file: str = ""
+    unknown_caller_policy: Literal["anonymous", "reject"] = "anonymous"
+    agent_api_key: str = ""
+    agent_model: str = "gpt-4.1-mini"
+    agent_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "json"
 
@@ -132,6 +140,15 @@ class Settings(BaseSettings):
         result: dict[str, int] = {}
         for key, value in env.items():
             match = PERSON_ID_ENV.match(key.upper())
+            if match and value.strip():
+                result[match.group(1).lower()] = int(value.strip())
+        return result
+
+    def monday_requester_ids(self, environ: dict[str, str] | None = None) -> dict[str, int]:
+        env = os.environ if environ is None else environ
+        result: dict[str, int] = {}
+        for key, value in env.items():
+            match = REQUESTER_ID_ENV.match(key.upper())
             if match and value.strip():
                 result[match.group(1).lower()] = int(value.strip())
         return result

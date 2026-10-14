@@ -26,6 +26,42 @@ async def test_accepted_command_is_persisted_before_ack(container):
     assert container.queue.pending() == 1
 
 
+async def test_requester_metadata_never_replaces_assignee(container):
+    state = ConversationState(caller_number="101", requester_key="ahmed")
+    reply = await container.engine.handle(state, EXAMPLE)
+    job = container.store.get(reply.job.id)
+    assert job.intent["requester"] == {"person_key": "ahmed", "caller_number": "101"}
+    assert job.payload["assignee_key"] == "mohamed"
+
+
+async def test_same_utterance_correction_preserves_task_details(container):
+    reply = await container.engine.handle(
+        ConversationState(), "حطي لمحمد يشتري هارد اتنين تيرا، لا قصدي أحمد"
+    )
+    assert reply.kind == "accepted"
+    assert reply.job.payload["assignee_key"] == "ahmed"
+    assert "اتنين تيرا" in reply.job.payload["title"]
+
+
+async def test_saved_job_can_be_replaced_only_before_worker_claims(container, worker):
+    state = ConversationState()
+    first = await container.engine.handle(state, EXAMPLE)
+    second = await container.engine.handle(state, "لا قصدي أحمد")
+    assert second.kind == "accepted"
+    assert container.store.get(first.job.id).last_error == "cancelled by caller before execution"
+    await worker.run_until_idle()
+    assert container.store.get(second.job.id).status is JobStatus.COMPLETED
+
+
+async def test_executed_job_correction_is_truthful(container, worker):
+    state = ConversationState()
+    await container.engine.handle(state, EXAMPLE)
+    await worker.run_until_idle()
+    reply = await container.engine.handle(state, "لا قصدي أحمد")
+    assert reply.kind == "unsupported"
+    assert container.store.status_counts() == {"completed": 1}
+
+
 async def test_multiple_commands_in_one_session(container, worker, mock_monday):
     state = ConversationState()
     commands = [
@@ -106,19 +142,18 @@ async def test_unsupported_command_keeps_call_open(container):
     reply = await container.engine.handle(state, "ابعتي لسارة تقرير المبيعات")
     assert reply.kind == "unsupported"
     assert not reply.end_call
-    assert "تقرير المبيعات" in reply.text
+    assert "تاسكات" in reply.text
     assert container.store.status_counts() == {}
 
 
-async def test_unsupported_reminder_offers_a_task(container):
+async def test_unsupported_reminder_does_not_become_a_task(container):
     state = ConversationState()
     reply = await container.engine.handle(state, "فكري أحمد يكلم العميل بكرة")
-    assert reply.kind == "offer"
-    assert "أحمد" in reply.text
+    assert reply.kind == "unsupported"
+    assert state.pending is None
     reply = await container.engine.handle(state, "آه حطيها")
-    assert reply.kind == "accepted"
-    assert reply.intent.task == "التواصل مع العميل بكرة"
-    assert reply.intent.assignee == "Ahmed"
+    assert reply.kind != "accepted"
+    assert container.store.status_counts() == {}
 
 
 async def test_declined_offer_creates_nothing(container):

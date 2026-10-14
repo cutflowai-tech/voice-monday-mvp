@@ -126,26 +126,26 @@ async def _run_ari(settings: Settings) -> None:
         record_max_seconds=settings.record_max_seconds,
         record_max_silence_seconds=settings.record_max_silence_seconds,
         max_consecutive_failures=settings.call_max_consecutive_failures,
+        preparation_timeout_seconds=settings.call_preparation_timeout_seconds,
     )
 
     def loop_factory(channel):
-        return VoiceLoop(
+        loop = VoiceLoop(
             channel=channel,
             stt=stt,
             engine=container.engine,
             acks=container.acks,
             config=loop_config,
         )
+        from voice_agent.domain.callers import normalize_caller
+
+        loop.state.caller_number = normalize_caller(channel.caller)
+        loop.state.requester_key = container.callers.lookup(channel.caller)
+        if loop.state.requester_key is None and settings.unknown_caller_policy == "reject":
+            loop.reject_unknown_caller = True
+        return loop
 
     await stt.warmup()
-    # Pre-render greetings (cached on disk) so the first call starts instantly.
-    greetings = {await container.acks.greeting() for _ in range(10)}
-    for text in greetings:
-        try:
-            await speech.render(text)
-        except Exception as exc:
-            log.warning("ari.prerender_failed", error=repr(exc))
-
     app = AriApplication(ari=ari, speech=speech, loop_factory=loop_factory)
     stop = asyncio.Event()
     _install_stop_handlers(stop)

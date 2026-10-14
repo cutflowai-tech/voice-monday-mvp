@@ -98,7 +98,7 @@ custom file set with `PEOPLE_DIRECTORY_FILE`).
 
 ### Phone calls via Asterisk
 
-Follow [docs/ASTERISK.md](docs/ASTERISK.md). In short: route **one unused test extension**
+Follow [docs/ASTERISK.md](docs/ASTERISK.md). The assistant extension is **777**; route it
 to `Stasis(voice-monday-agent)`, add a dedicated ARI user, then:
 
 ```bash
@@ -181,8 +181,8 @@ tests/            pytest suite (+ optional live Monday integration test)
   In mock mode every directory person gets a fake Monday id.
 * **Clarification**: one short question per turn and at most two rounds. After that she
   asks for the full request again.
-* **Turn-taking**: record until silence (or `#`), then reply. There is no barge-in while
-  she is speaking.
+* **Turn-taking**: record until silence (or `#`), then reply. The current ARI recording
+  transport does not yet provide continuous barge-in; handset verification is pending.
 * **Addressing the caller**: replies use the common Egyptian polite default (حضرتك /
   masculine second person). Edit `ack/templates.py` to change this.
 * **Commands spoken right before a hang-up** are still transcribed and executed. She just

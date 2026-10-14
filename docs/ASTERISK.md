@@ -36,17 +36,17 @@ Asterisk plays  sound:/var/lib/asterisk/sounds/voice-monday/<file>  ◄──┘
 
 ## 1. Choose an unused test extension
 
-Pick a number that does not exist anywhere, e.g. `7999`. Find the context your test
+Pick a number that does not exist anywhere, e.g. `777`. Find the context your test
 phone uses (`asterisk -rx "pjsip show endpoint <your-phone>"` → `context`), then:
 
 ```bash
-asterisk -rx "dialplan show 7999@from-internal"
+asterisk -rx "dialplan show 777@from-internal"
 ```
 
 It must report that the extension does not exist. Put the number in `.env`:
 
 ```bash
-ASTERISK_TEST_EXTENSION=7999
+ASTERISK_TEST_EXTENSION=777
 ```
 
 ## 2. Generate the snippets from your `.env`
@@ -114,7 +114,7 @@ sudo cp build/asterisk/extensions_voice_monday.conf /etc/asterisk/
 
 The included context contains a single literal extension, so no existing extension or
 pattern changes behaviour. (If the phone's context has a broad pattern such as `_7XXX`
-that already matches 7999, choose another number.)
+that already matches 777, choose another number.)
 
 ### 3d. Sounds folder for generated speech
 
@@ -148,7 +148,7 @@ Verify:
 
 ```bash
 asterisk -rx "ari show users"                         # voice-monday listed
-asterisk -rx "dialplan show 7999@from-internal"       # resolves to voice-monday-test
+asterisk -rx "dialplan show 777@from-internal"       # resolves to voice-monday-test
 ```
 
 ## 4. Start the agent
@@ -174,8 +174,8 @@ asterisk -rx "ari show apps"        # voice-monday-agent listed
 
 ## 5. Test procedure (does not affect existing extensions)
 
-1. With `MONDAY_MODE=mock`, dial `7999` from the test phone; run `asterisk -rvvv` to watch.
-2. You should hear a greeting. Say: **«حطي تاسك لمحمد إنه يشتري هارد للسيرفر»**.
+1. With `MONDAY_MODE=mock`, dial `777` from the test phone; run `asterisk -rvvv` to watch.
+2. Speak as soon as the call is answered: **«حطي تاسك لمحمد إنه يشتري هارد للسيرفر»**.
 3. Expect a short acknowledgment that mentions Mohamed and the hard drive, and the call
    keeps listening. Give a second instruction, then hang up.
 4. Check the jobs (`docker compose logs worker`, or `GET /jobs/{id}` using the `job_id`
@@ -195,7 +195,7 @@ Other extensions are untouched throughout: only calls to the test extension ente
 |---|---|---|
 | Caller → agent | ARI `record` with `format=wav` → 8 kHz 16-bit mono PCM | Asterisk transcodes from any call codec (ulaw/alaw/G.722/Opus). The agent upsamples to 16 kHz for Whisper. |
 | Agent → caller | ElevenLabs `pcm_16000` → `.sln16` file | Asterisk transcodes to the call codec; needs `format_sln` and `codec_resample`. |
-| Fallback | `sound:beep` | Played if ElevenLabs fails, so the caller still gets audible feedback. |
+| TTS failure | no playback | The call remains active for another utterance; no artificial beep is played. |
 
 * **G.729 phones**: transcoding needs a G.729 codec module; use ulaw/alaw on the test phone.
 * Silence detection uses ARI `maxSilenceSeconds` (`RECORD_MAX_SILENCE_SECONDS`, default 2);
@@ -216,4 +216,4 @@ Other extensions are untouched throughout: only calls to the test extension ente
 5. Reload: `asterisk -rx "dialplan reload"`, `asterisk -rx "module reload res_ari.so"`,
    and `asterisk -rx "module reload http"` if you changed http.conf.
 6. Optionally `sudo rm -r /var/lib/asterisk/sounds/voice-monday`.
-7. Confirm: `asterisk -rx "dialplan show 7999@from-internal"` reports no such extension.
+7. Confirm: `asterisk -rx "dialplan show 777@from-internal"` reports no such extension.

@@ -91,9 +91,8 @@ async def test_call_stays_active_after_task_and_accepts_more(container, worker, 
 
     assert reason == "caller_hangup"
     assert channel.answered and not channel.hung_up_by_agent
-    # greeting + two acknowledgments; the call kept listening after each task
-    assert len(channel.said) == 3
-    assert "محمد" in channel.said[1] and "أحمد" in channel.said[2]
+    assert len(channel.said) == 2
+    assert "محمد" in channel.said[0] and "أحمد" in channel.said[1]
     assert len(loop.state.accepted_job_ids) == 2
 
     await worker.run_until_idle()  # after the hangup
@@ -105,7 +104,7 @@ async def test_command_spoken_right_before_hangup_is_still_executed(container, w
     channel = FakeChannel([("hangup_after", EXAMPLE)])
     loop = make_loop(container, channel)
     assert await loop.run() == "caller_hangup"
-    assert len(channel.said) == 1  # only the greeting; no one left to hear the ack
+    assert len(channel.said) == 0
     await worker.run_until_idle()
     job = container.store.get(loop.state.accepted_job_ids[0])
     assert job.status is JobStatus.COMPLETED
@@ -131,8 +130,8 @@ async def test_clarification_happens_inside_the_call(container):
     channel = FakeChannel(["حطي تاسك لمحمد", "يشتري هارد للسيرفر", HANGUP])
     loop = make_loop(container, channel)
     await loop.run()
-    assert channel.said[1].endswith("؟")
-    assert "هارد" in channel.said[2]
+    assert channel.said[0].endswith("؟")
+    assert "هارد" in channel.said[1]
     assert len(loop.state.accepted_job_ids) == 1
 
 
@@ -154,3 +153,38 @@ async def test_unsupported_request_does_not_end_call(container):
     assert await loop.run() == "caller_hangup"
     assert not channel.hung_up_by_agent
     assert len(loop.state.accepted_job_ids) == 1
+
+
+async def test_prepare_precedes_answer_and_immediate_recording(container):
+    order = []
+
+    class OrderedChannel(FakeChannel):
+        async def prepare(self):
+            order.append("prepare")
+
+        async def answer(self):
+            order.append("answer")
+            await super().answer()
+
+        async def listen(self, **kwargs):
+            order.append("listen")
+            return await super().listen(**kwargs)
+
+        async def say(self, text):
+            order.append("say")
+            return await super().say(text)
+
+    channel = OrderedChannel([EXAMPLE, HANGUP])
+    await make_loop(container, channel).run()
+    assert order[:3] == ["prepare", "answer", "listen"]
+
+
+async def test_prepare_failure_never_answers(container):
+    class BrokenChannel(FakeChannel):
+        async def prepare(self):
+            raise RuntimeError("audio path unavailable")
+
+    channel = BrokenChannel([EXAMPLE])
+    assert await make_loop(container, channel).run() == "technical_failure"
+    assert not channel.answered
+    assert channel.hung_up_by_agent

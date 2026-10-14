@@ -110,6 +110,7 @@ class MondayConfig:
     assignee_column_type: str = "people"
     task_name_column: str = "name"
     idempotency_column: str = ""
+    requester_column: str = ""
     api_url: str = "https://api.monday.com/v2"
     api_version: str = "2026-07"
     timeout_seconds: float = 10.0
@@ -121,8 +122,9 @@ class MondayConnector(Connector):
     name = "monday"
     operations = frozenset({CREATE_TASK})
 
-    def __init__(self, person_ids: dict[str, int]):
+    def __init__(self, person_ids: dict[str, int], requester_ids: dict[str, int] | None = None):
         self.person_ids = dict(person_ids)
+        self.requester_ids = dict(requester_ids or {})
 
     def validate(self, operation: str, payload: dict[str, Any]) -> list[ValidationIssue]:
         issues = super().validate(operation, payload)
@@ -154,11 +156,12 @@ class MondayConnector(Connector):
             title=payload["title"].strip(),
             person_id=self.person_ids[payload["assignee_key"]],
             ctx=ctx,
+            requester_id=self.requester_ids.get(payload.get("requester_key")),
         )
 
     @abstractmethod
     async def create_task(
-        self, *, title: str, person_id: int, ctx: ExecutionContext
+        self, *, title: str, person_id: int, ctx: ExecutionContext, requester_id: int | None = None
     ) -> ConnectorResult: ...
 
 
@@ -167,10 +170,11 @@ class MondayGraphQLConnector(MondayConnector):
         self,
         config: MondayConfig,
         person_ids: dict[str, int],
+        requester_ids: dict[str, int] | None = None,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
-        super().__init__(person_ids)
+        super().__init__(person_ids, requester_ids)
         self.config = config
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(config.timeout_seconds, connect=5.0),
@@ -178,7 +182,9 @@ class MondayGraphQLConnector(MondayConnector):
         )
 
     # ------------------------------------------------------------------ requests
-    def column_values(self, *, title: str, person_id: int, idempotency_key: str) -> dict:
+    def column_values(
+        self, *, title: str, person_id: int, idempotency_key: str, requester_id: int | None = None
+    ) -> dict:
         if self.config.assignee_column_type == "dropdown":
             assignee: dict[str, Any] = {"ids": [person_id]}
         else:
@@ -188,10 +194,14 @@ class MondayGraphQLConnector(MondayConnector):
             values[self.config.task_name_column] = title
         if self.config.idempotency_column:
             values[self.config.idempotency_column] = idempotency_key
+        if self.config.requester_column and requester_id is not None:
+            values[self.config.requester_column] = {
+                "personsAndTeams": [{"id": requester_id, "kind": "person"}]
+            }
         return values
 
     def build_create_request(
-        self, *, title: str, person_id: int, idempotency_key: str
+        self, *, title: str, person_id: int, idempotency_key: str, requester_id: int | None = None
     ) -> tuple[dict[str, str], dict[str, Any]]:
         headers = self._headers()
         headers["Idempotency-Key"] = idempotency_key
@@ -203,7 +213,10 @@ class MondayGraphQLConnector(MondayConnector):
                 "itemName": title[:MAX_ITEM_NAME],
                 "columnValues": json.dumps(
                     self.column_values(
-                        title=title, person_id=person_id, idempotency_key=idempotency_key
+                        title=title,
+                        person_id=person_id,
+                        idempotency_key=idempotency_key,
+                        requester_id=requester_id,
                     ),
                     ensure_ascii=False,
                 ),
@@ -220,7 +233,7 @@ class MondayGraphQLConnector(MondayConnector):
 
     # ------------------------------------------------------------------ operations
     async def create_task(
-        self, *, title: str, person_id: int, ctx: ExecutionContext
+        self, *, title: str, person_id: int, ctx: ExecutionContext, requester_id: int | None = None
     ) -> ConnectorResult:
         if ctx.prior_attempt_uncertain and self.config.idempotency_column:
             existing = await self.find_by_key(ctx.idempotency_key)
@@ -229,7 +242,10 @@ class MondayGraphQLConnector(MondayConnector):
                 return self._result(existing, replayed=True, recovered=True)
 
         headers, body = self.build_create_request(
-            title=title, person_id=person_id, idempotency_key=ctx.idempotency_key
+            title=title,
+            person_id=person_id,
+            idempotency_key=ctx.idempotency_key,
+            requester_id=requester_id,
         )
         response, data = await self._post(headers, body, mutation=True)
         item = (data or {}).get("create_item")
@@ -363,12 +379,13 @@ class MockMondayConnector(MondayConnector):
         self._next_id = 9_000_000_001
 
     async def create_task(
-        self, *, title: str, person_id: int, ctx: ExecutionContext
+        self, *, title: str, person_id: int, ctx: ExecutionContext, requester_id: int | None = None
     ) -> ConnectorResult:
         self.calls.append(
             {
                 "title": title,
                 "person_id": person_id,
+                "requester_id": requester_id,
                 "key": ctx.idempotency_key,
                 "attempt": ctx.attempt,
             }

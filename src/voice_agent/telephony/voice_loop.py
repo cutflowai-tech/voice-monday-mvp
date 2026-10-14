@@ -30,6 +30,7 @@ class VoiceLoopConfig:
     record_max_seconds: int = 20
     record_max_silence_seconds: int = 2
     max_consecutive_failures: int = 3
+    preparation_timeout_seconds: float = 8.0
 
 
 class VoiceLoop:
@@ -52,6 +53,7 @@ class VoiceLoop:
         self.state = ConversationState(call_id=channel.call_id)
         self.failures = 0
         self.end_reason: EndReason | None = None
+        self.reject_unknown_caller = False
 
     async def run(self) -> EndReason:
         started = self.clock()
@@ -71,9 +73,27 @@ class VoiceLoop:
         return self.end_reason
 
     async def _run(self) -> EndReason:
+        import asyncio
+
+        preparing_at = time.monotonic()
+        if self.reject_unknown_caller:
+            await self.channel.hangup()
+            return "technical_failure"
+        try:
+            await asyncio.wait_for(self.channel.prepare(), self.config.preparation_timeout_seconds)
+        except CallHungUp:
+            return "caller_hangup"
+        except Exception as exc:
+            self._failed("prepare", exc)
+            await self.channel.hangup()
+            return "technical_failure"
         await self.channel.answer()
+        log.info(
+            "call.ready",
+            call_id=self.channel.call_id,
+            preparation_ms=round((time.monotonic() - preparing_at) * 1000),
+        )
         log.info("call.answered", call_id=self.channel.call_id, session_id=self.state.session_id)
-        await self._say(await self.acks.greeting())
         last_activity = self.clock()
 
         while True:
@@ -96,6 +116,7 @@ class VoiceLoop:
                 continue
             if audio is None:
                 continue  # silence; inactivity timer keeps running
+            utterance_ended_at = time.monotonic()
 
             try:
                 transcript = await self.stt.transcribe(audio, language=self.config.language)
@@ -113,6 +134,12 @@ class VoiceLoop:
             self.failures = self.failures + 1 if reply.kind == "error" else 0
             if not self.channel.active:
                 return "caller_hangup"
+            log.info(
+                "call.response_ready",
+                call_id=self.channel.call_id,
+                turn=self.state.turn,
+                latency_ms=round((time.monotonic() - utterance_ended_at) * 1000),
+            )
             await self._say(reply.text)
             last_activity = self.clock()
             if reply.end_call:
