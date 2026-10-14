@@ -10,6 +10,12 @@ each call it checks the channel while it rings, then answers and starts recordin
 without a greeting or beep. Asterisk's channel recording captures incoming audio
 only. The short answer-to-record transition remains to be measured with a handset.
 
+This host binds ARI and Redis only to `127.0.0.1`. Copy
+`deploy/asterisk-host.override.yml` to `docker-compose.override.yml` on the host;
+it runs only the ARI container with host networking, keeping its existing access
+to Asterisk and the local Redis port. All subsequent Compose commands must run
+from the project directory so this override is loaded automatically.
+
 `CALLER_DIRECTORY_FILE` points to a JSON object mapping caller numbers or internal
 extensions to keys in `people.json`, for example `{"101": "ahmed"}` **only if the
 owner has verified that assignment**. The default policy records an unknown

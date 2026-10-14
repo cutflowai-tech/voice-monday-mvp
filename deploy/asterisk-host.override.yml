@@ -1,0 +1,8 @@
+# Use when Asterisk and Redis publish only on this host's loopback interface.
+# Copy to docker-compose.override.yml beside docker-compose.yml on that PBX.
+services:
+  ari:
+    network_mode: host
+    environment:
+      ASTERISK_SOUNDS_DIR: /sounds
+      REDIS_URL: redis://127.0.0.1:6379/0

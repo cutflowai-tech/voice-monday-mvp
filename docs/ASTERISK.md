@@ -22,7 +22,7 @@ Asterisk plays  sound:voice-monday/<file>  ◄──┘
 * Caller audio: Asterisk records each utterance as WAV; the agent downloads it with
   `GET /ari/recordings/stored/{name}/file` and deletes it afterwards.
 * Assistant audio: the agent writes signed-linear 16 kHz files (`.sln16`) into a folder
-  that Asterisk can read, and plays them with `sound:<absolute path>`.
+  that Asterisk can read, and plays them with `sound:voice-monday/<file>`.
 
 ## Requirements
 
