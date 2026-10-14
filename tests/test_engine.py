@@ -59,6 +59,17 @@ async def test_agent_cannot_create_task_from_audio_diagnostic(container):
     assert container.store.status_counts() == {}
 
 
+async def test_clear_task_uses_fast_parser_path(container):
+    class FailingAgent:
+        async def decide(self, text, pending):
+            raise AssertionError("clear task should not call the model")
+
+    container.engine.agent = FailingAgent()
+    reply = await container.engine.handle(ConversationState(), "حطي لمحمد تاسك يشتري هارد")
+    assert reply.kind == "accepted"
+    assert reply.job.payload["title"] == "شراء هارد"
+
+
 async def test_same_utterance_correction_preserves_task_details(container):
     reply = await container.engine.handle(
         ConversationState(), "حطي لمحمد يشتري هارد اتنين تيرا، لا قصدي أحمد"

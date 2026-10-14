@@ -144,9 +144,18 @@ class ConversationEngine:
                 and parse.intent.assignee is not None
                 and parse.intent.details.assignee_key is None
             )
+            clear_task = (
+                state.pending is None
+                and parse.status == "ok"
+                and parse.confidence >= 0.9
+                and parse.intent is not None
+                and parse.intent.action is Action.CREATE_TASK
+                and bool(parse.intent.details.assignee_key and parse.intent.task)
+            )
             if (
                 self.agent
                 and not unknown_spoken_assignee
+                and not clear_task
                 and not (parse.status == "ok" and parse.confidence >= 0.99)
             ):
                 reply = await self._dispatch_agent(state, text, idempotency_key)
