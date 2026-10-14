@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from voice_agent.conversation.agent import AgentDecision
 from voice_agent.conversation.engine import ConversationState
 from voice_agent.jobs.models import JobStatus
 
@@ -32,6 +33,19 @@ async def test_requester_metadata_never_replaces_assignee(container):
     job = container.store.get(reply.job.id)
     assert job.intent["requester"] == {"person_key": "ahmed", "caller_number": "101"}
     assert job.payload["assignee_key"] == "mohamed"
+
+
+async def test_agent_cannot_guess_an_unknown_spoken_assignee(container):
+    class GuessingAgent:
+        async def decide(self, text, pending):
+            return AgentDecision(
+                action="submit", assignee_key="mohamed", task="شراء هارد", question=None
+            )
+
+    container.engine.agent = GuessingAgent()
+    reply = await container.engine.handle(ConversationState(), "حطي لمحسن يشتري هارد")
+    assert reply.kind == "clarification"
+    assert container.store.status_counts() == {}
 
 
 async def test_same_utterance_correction_preserves_task_details(container):

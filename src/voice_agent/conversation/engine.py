@@ -138,7 +138,17 @@ class ConversationEngine:
                 intent.details.assignee_gender = revised.intent.details.assignee_gender
                 parse = ParseResult(status="ok", intent=intent, confidence=base.confidence)
         try:
-            if self.agent and not (parse.status == "ok" and parse.confidence >= 0.99):
+            unknown_spoken_assignee = (
+                parse.intent is not None
+                and parse.intent.action is Action.CREATE_TASK
+                and parse.intent.assignee is not None
+                and parse.intent.details.assignee_key is None
+            )
+            if (
+                self.agent
+                and not unknown_spoken_assignee
+                and not (parse.status == "ok" and parse.confidence >= 0.99)
+            ):
                 reply = await self._dispatch_agent(state, text, idempotency_key)
             else:
                 reply = await self._dispatch(state, text, parse, idempotency_key)

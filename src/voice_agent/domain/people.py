@@ -27,12 +27,19 @@ class PeopleDirectory:
     def __init__(self, people: list[Person]):
         self._people = {p.key: p for p in people}
         self._by_alias: dict[str, Person] = {}
+        self._ambiguous_aliases: set[str] = set()
         for person in people:
             for alias in (person.name_ar, person.name_en, *person.aliases):
-                self._by_alias[normalize_token(alias)] = person
+                normalized = normalize_token(alias)
+                existing = self._by_alias.get(normalized)
+                if existing and existing.key != person.key:
+                    self._ambiguous_aliases.add(normalized)
+                else:
+                    self._by_alias[normalized] = person
 
     def lookup(self, spoken: str) -> Person | None:
-        return self._by_alias.get(normalize_token(spoken))
+        normalized = normalize_token(spoken)
+        return None if normalized in self._ambiguous_aliases else self._by_alias.get(normalized)
 
     def get(self, key: str) -> Person | None:
         return self._people.get(key)

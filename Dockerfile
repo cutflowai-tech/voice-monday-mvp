@@ -15,6 +15,7 @@ COPY pyproject.toml README.md ./
 RUN mkdir -p src/voice_agent && touch src/voice_agent/__init__.py \
     && pip install ".[stt]" && pip uninstall -y voice-monday-agent && rm -rf src
 COPY src ./src
+COPY config ./config
 RUN pip install --no-deps . \
     && mkdir -p /app/data /models /sounds \
     && chown -R app:app /app/data /models /sounds
