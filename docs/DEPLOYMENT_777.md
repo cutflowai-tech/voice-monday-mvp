@@ -14,6 +14,11 @@ After the first substantive utterance is transcribed, a short pre-rendered
 "تمام، ثانية واحدة" cue plays once per call while the request is handled. Silence
 and one-word fragments do not trigger it. The final answer cancels any unfinished
 cue before it plays.
+During reply playback, the ARI call enables `TALK_DETECT` and records incoming
+audio separately from outgoing speech. Caller speech stops the playback and the
+captured audio becomes the next turn. This was observed on extension 777 with an
+interrupted handset call. Speech during the short synthesis interval before
+playback still needs further capture work.
 
 This host binds ARI and Redis only to `127.0.0.1`. Copy
 `deploy/asterisk-host.override.yml` to `docker-compose.override.yml` on the host;
