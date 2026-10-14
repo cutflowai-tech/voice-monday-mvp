@@ -1,6 +1,6 @@
 [
   {"key": "mohamed", "name_en": "Mohamed", "name_ar": "محمد", "gender": "m",
-   "aliases": ["محمّد", "مُحمد", "حمادة", "Mohammed", "Muhammad"]},
+   "aliases": ["محمّد", "مُحمد", "حمادة", "محسن", "Mohammed", "Muhammad", "Mohsen"]},
   {"key": "michael", "name_en": "Michael", "name_ar": "مايكل", "gender": "m",
    "aliases": ["ميكل", "ميكايل", "مايكال"]},
   {"key": "amir", "name_en": "Amir", "name_ar": "أمير", "gender": "m", "aliases": []},

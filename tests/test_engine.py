@@ -43,7 +43,7 @@ async def test_agent_cannot_guess_an_unknown_spoken_assignee(container):
             )
 
     container.engine.agent = GuessingAgent()
-    reply = await container.engine.handle(ConversationState(), "حطي لمحسن يشتري هارد")
+    reply = await container.engine.handle(ConversationState(), "حطي لسليم يشتري هارد")
     assert reply.kind == "clarification"
     assert container.store.status_counts() == {}
 
@@ -88,6 +88,19 @@ async def test_same_utterance_correction_preserves_task_details(container):
     )
     assert reply.kind == "accepted"
     assert reply.job.payload["assignee_key"] == "ahmed"
+    assert "اتنين تيرا" in reply.job.payload["title"]
+
+
+async def test_mohsen_is_verified_alias_for_mohamed(container):
+    direct = await container.engine.handle(ConversationState(), "حطي لمحسن يشتري هارد")
+    assert direct.kind == "accepted"
+    assert direct.job.payload["assignee_key"] == "mohamed"
+
+    reply = await container.engine.handle(
+        ConversationState(), "حطي لمحمد يشتري هارد اتنين تيرا، لا قصدي محسن"
+    )
+    assert reply.kind == "accepted"
+    assert reply.job.payload["assignee_key"] == "mohamed"
     assert "اتنين تيرا" in reply.job.payload["title"]
 
 
