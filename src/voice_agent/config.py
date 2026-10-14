@@ -96,7 +96,8 @@ class Settings(BaseSettings):
     whisper_compute_type: str = "int8"
     whisper_beam_size: int = 5
     whisper_initial_prompt: str = (
-        "حطي تاسك لمحمد إنه يشتري هارد للسيرفر. فكري أحمد يكلم العميل بكرة."
+        "حطي لمحسن تاسك ييجي بعد بكرة، وقولي لميكل ييجي بكرة. "
+        "محسن هو محمد. مايكل. أحمد. آه صح. لا غلط، عدّلي أول تاسك."
     )
     default_language: str = "ar"
 
@@ -118,6 +119,7 @@ class Settings(BaseSettings):
     agent_provider: Literal["openai", "openrouter"] = "openai"
     agent_model: str = "gpt-4.1-mini"
     agent_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
+    review_before_submit: bool = True
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "json"
 

@@ -138,6 +138,7 @@ def build_container(
         session_log=session_log,
         agent=agent,
         directory=directory,
+        review_before_submit=settings.review_before_submit,
     )
     return Container(
         settings=settings,

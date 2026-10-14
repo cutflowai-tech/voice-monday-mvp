@@ -136,6 +136,7 @@ def create_app(settings: Settings | None = None, container: Container | None = N
             job = await _wait_for_terminal(c, job.id, body.wait_seconds) or job
         return {
             "job_id": job.id if job else None,
+            "job_ids": state.accepted_job_ids.copy(),
             "status": job.status.value if job else None,
             "intent": reply.intent.public_dict() if reply.intent else None,
             "acknowledgment": reply.text,

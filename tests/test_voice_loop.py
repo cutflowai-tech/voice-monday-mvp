@@ -105,6 +105,18 @@ async def test_call_stays_active_after_task_and_accepts_more(container, worker, 
     assert len(mock_monday.items) == 2
 
 
+async def test_voice_call_waits_for_yes_before_saving_multiple_tasks(container, worker):
+    container.engine.review_before_submit = True
+    channel = FakeChannel(["حطي لمحسن تاسك ييجي بعد بكرة، وقولي لميكل ييجي بكرة", "آه صح", HANGUP])
+    loop = make_loop(container, channel)
+    await loop.run()
+    assert "صح كده" in channel.said[0]
+    assert "سجلت" in channel.said[1]
+    assert len(loop.state.accepted_job_ids) == 2
+    await worker.run_until_idle()
+    assert container.store.status_counts() == {"completed": 2}
+
+
 async def test_command_spoken_right_before_hangup_is_still_executed(container, worker):
     channel = FakeChannel([("hangup_after", EXAMPLE)])
     loop = make_loop(container, channel)

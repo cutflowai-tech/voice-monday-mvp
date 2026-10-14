@@ -15,7 +15,7 @@ from voice_agent.jobs.worker import Worker
 from voice_agent.nlu.egyptian_parser import EgyptianArabicParser
 
 EXAMPLE = "حطي تاسك لمحمد إنه يشتري هارد للسيرفر"
-PERSON_IDS = {"mohamed": 111, "ahmed": 222, "sara": 333}
+PERSON_IDS = {"mohamed": 111, "ahmed": 222, "sara": 333, "michael": 444}
 
 
 @pytest.fixture
@@ -38,6 +38,7 @@ def settings(tmp_path) -> Settings:
     return Settings(
         database_url=f"sqlite:///{tmp_path / 'test.db'}",
         monday_mode="mock",
+        review_before_submit=False,
         job_backoff_base_seconds=0.01,
         job_backoff_max_seconds=0.05,
         job_reconcile_interval_seconds=0.05,

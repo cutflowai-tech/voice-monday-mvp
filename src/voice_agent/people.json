@@ -1,8 +1,8 @@
 [
   {"key": "mohamed", "name_en": "Mohamed", "name_ar": "محمد", "gender": "m",
-   "aliases": ["محمّد", "مُحمد", "حمادة", "محسن", "Mohammed", "Muhammad", "Mohsen"]},
+   "aliases": ["محمّد", "مُحمد", "حمادة", "محسن", "المحسن", "Mohammed", "Muhammad", "Mohsen"]},
   {"key": "michael", "name_en": "Michael", "name_ar": "مايكل", "gender": "m",
-   "aliases": ["ميكل", "ميكايل", "مايكال"]},
+   "aliases": ["ميكل", "الميكل", "ميكايل", "مايكال"]},
   {"key": "amir", "name_en": "Amir", "name_ar": "أمير", "gender": "m", "aliases": []},
   {"key": "ziad", "name_en": "Ziad", "name_ar": "زياد", "gender": "m", "aliases": ["Zyad", "Zeyad"]},
   {"key": "ahmed", "name_en": "Ahmed", "name_ar": "أحمد", "gender": "m", "aliases": ["Ahmad"]},

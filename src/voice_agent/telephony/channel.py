@@ -163,14 +163,6 @@ class AriCallChannel(CallChannel):
             raise CallHungUp
         ok = True
         started_at = time.monotonic()
-        try:
-            media = await self.speech.render(text)
-        except Exception as exc:
-            log.error("call.tts_failed", call_id=self.call_id, error=repr(exc))
-            return False
-        await self._stop_working()
-        playback_id = uuid.uuid4().hex
-        future = self.bus.expect("playback", playback_id)
         capture_name: str | None = None
         capture_future: asyncio.Future | None = None
         if self._barge_in_enabled:
@@ -191,6 +183,27 @@ class AriCallChannel(CallChannel):
                 capture_name = None
                 capture_future = None
                 log.warning("call.barge_capture_unavailable", call_id=self.call_id, error=str(exc))
+        try:
+            media = await self.speech.render(text)
+        except Exception as exc:
+            log.error("call.tts_failed", call_id=self.call_id, error=repr(exc))
+            await self._stop_working()
+            if capture_name:
+                self._pending_audio = await self._finish_barge_capture(
+                    capture_name, capture_future, keep=self._talk_started.is_set()
+                )
+            return False
+        await self._stop_working()
+        if capture_name and self._talk_started.is_set():
+            if self._talking:
+                await self._wait_for_talk_end(20.0)
+            self._pending_audio = await self._finish_barge_capture(
+                capture_name, capture_future, keep=True
+            )
+            log.info("call.reply_skipped_for_caller", call_id=self.call_id)
+            return ok
+        playback_id = uuid.uuid4().hex
+        future = self.bus.expect("playback", playback_id)
         try:
             await self.ari.play(self.channel_id, media, playback_id)
             log.info(

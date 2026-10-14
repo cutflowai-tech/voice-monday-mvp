@@ -85,3 +85,44 @@ async def test_openrouter_uses_strict_chat_completion(directory):
     decision = await agent.decide("حطي لمحمد يشتري هارد", None)
     assert decision.assignee_key == "mohamed"
     await agent.aclose()
+
+
+async def test_review_agent_extracts_multiple_tasks_with_strict_schema(directory):
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        schema = body["response_format"]["json_schema"]
+        assert schema["strict"] is True
+        assert schema["schema"]["properties"]["tasks"]["maxItems"] == 5
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action": "draft",
+                                    "tasks": [
+                                        {"assignee_key": "mohamed", "task": "يأتي بعد بكرة"},
+                                        {"assignee_key": "michael", "task": "يأتي بكرة"},
+                                    ],
+                                    "question": None,
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    agent = StructuredTaskAgent(
+        api_key="test",
+        model="openai/gpt-4.1-mini",
+        provider="openrouter",
+        directory=directory,
+        transport=httpx.MockTransport(respond),
+    )
+    result = await agent.decide_review("قولي لمحسن ييجي بعد بكرة، ولميكل ييجي بكرة")
+    assert [task.assignee_key for task in result.tasks] == ["mohamed", "michael"]
+    await agent.aclose()

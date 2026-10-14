@@ -276,6 +276,27 @@ async def test_speech_during_playback_interrupts_and_is_preserved():
     assert sum(r[0] == "record" for r in ari.requests) == 1
 
 
+async def test_speech_during_synthesis_is_preserved_before_playback():
+    class TalkingRenderer:
+        async def render(self, text):
+            assert any(r[0] == "record" for r in ari.requests)
+            bus.dispatch({"type": "ChannelTalkingStarted", "channel": {"id": "c5"}})
+            bus.dispatch({"type": "ChannelTalkingFinished", "channel": {"id": "c5"}})
+            return "sound:/sounds/vm-test"
+
+    class CapturingAri(FakeAri):
+        async def record(self, channel_id, name, **kwargs):
+            self.requests.append(("record", name, kwargs))
+
+    bus = AriEventBus()
+    ari = CapturingAri(bus)
+    channel = AriCallChannel(ari=ari, bus=bus, channel={"id": "c5"}, speech=TalkingRenderer())
+    await channel.prepare()
+    assert await channel.say("رد طويل") is True
+    assert not any(r[0] == "play" for r in ari.requests)
+    assert await channel.listen(max_seconds=10, max_silence_seconds=2) == b"RIFF" + b"\x00" * 4000
+
+
 async def test_normal_playback_discards_inbound_capture():
     bus = AriEventBus()
     ari = FakeAri(bus)

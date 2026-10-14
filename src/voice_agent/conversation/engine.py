@@ -45,6 +45,7 @@ MAX_CLARIFICATION_ROUNDS = 2
 
 ReplyKind = Literal[
     "accepted",
+    "review",
     "clarification",
     "unsupported",
     "offer",
@@ -84,6 +85,9 @@ class ConversationState:
     requester_key: str | None = None
     turn: int = 0
     pending: Pending | None = None
+    review_drafts: list[Intent] = field(default_factory=list)
+    review_transcripts: list[str] = field(default_factory=list)
+    review_nonce: str = ""
     accepted_job_ids: list[str] = field(default_factory=list)
     started_at: float = field(default_factory=time.time)
     last_activity_at: float = field(default_factory=time.time)
@@ -102,6 +106,7 @@ class ConversationEngine:
         session_log: SessionLog | None = None,
         agent: StructuredTaskAgent | None = None,
         directory: PeopleDirectory | None = None,
+        review_before_submit: bool = False,
     ):
         self.parser = parser
         self.acks = acks
@@ -111,6 +116,7 @@ class ConversationEngine:
         self.session_log = session_log
         self.agent = agent
         self.directory = directory
+        self.review_before_submit = review_before_submit
 
     async def handle(
         self,
@@ -138,40 +144,30 @@ class ConversationEngine:
                 intent.details.assignee_gender = revised.intent.details.assignee_gender
                 parse = ParseResult(status="ok", intent=intent, confidence=base.confidence)
         try:
-            unknown_spoken_assignee = (
-                parse.intent is not None
-                and parse.intent.action is Action.CREATE_TASK
-                and parse.intent.assignee is not None
-                and parse.intent.details.assignee_key is None
-            )
-            clear_task = (
-                state.pending is None
-                and parse.status == "ok"
-                and parse.confidence >= 0.9
-                and parse.intent is not None
-                and parse.intent.action is Action.CREATE_TASK
-                and bool(parse.intent.details.assignee_key and parse.intent.task)
-            )
-            clear_missing_task = (
-                state.pending is None
-                and parse.status == "incomplete"
-                and parse.confidence >= 0.9
-                and parse.intent is not None
-                and parse.intent.action is Action.CREATE_TASK
-                and bool(parse.intent.details.assignee_key)
-                and not parse.intent.task
-                and parse.missing == ["task"]
-            )
-            if (
-                self.agent
-                and not unknown_spoken_assignee
-                and not clear_task
-                and not clear_missing_task
-                and not (parse.status == "ok" and parse.confidence >= 0.99)
+            if self.review_before_submit and state.review_drafts:
+                reply = await self._handle_review(state, text, parse)
+            elif (
+                self.review_before_submit
+                and state.pending is None
+                and len(parts := self._split_task_commands(text)) > 1
             ):
-                reply = await self._dispatch_agent(state, text, idempotency_key)
+                reply = await self._draft_batch(state, text, parts)
+            elif (
+                self.review_before_submit
+                and state.pending is None
+                and len(self._mentioned_people(text)) > 1
+            ):
+                reply = (
+                    await self._draft_with_agent(state, text)
+                    if self.agent
+                    else AssistantReply(
+                        kind="clarification", text="سمعت أكتر من اسم. قولّي كل تاسك لوحدها."
+                    )
+                )
+            elif self.review_before_submit and parse.status == "unknown" and self.agent:
+                reply = await self._draft_with_agent(state, text)
             else:
-                reply = await self._dispatch(state, text, parse, idempotency_key)
+                reply = await self._handle_standard(state, text, parse, idempotency_key)
         except Exception:
             log.exception("conversation.error", session_id=state.session_id, turn=state.turn)
             reply = AssistantReply(kind="error", text=await self.acks.system_error())
@@ -190,6 +186,242 @@ class ConversationEngine:
         )
         await self._audit(state, text, parse, reply)
         return reply
+
+    async def _handle_standard(
+        self, state: ConversationState, text: str, parse: ParseResult, idempotency_key: str | None
+    ) -> AssistantReply:
+        unknown_spoken_assignee = (
+            parse.intent is not None
+            and parse.intent.action is Action.CREATE_TASK
+            and parse.intent.assignee is not None
+            and parse.intent.details.assignee_key is None
+        )
+        clear_task = (
+            state.pending is None
+            and parse.status == "ok"
+            and parse.confidence >= 0.9
+            and parse.intent is not None
+            and parse.intent.action is Action.CREATE_TASK
+            and bool(parse.intent.details.assignee_key and parse.intent.task)
+        )
+        clear_missing_task = (
+            state.pending is None
+            and parse.status == "incomplete"
+            and parse.confidence >= 0.9
+            and parse.intent is not None
+            and parse.intent.action is Action.CREATE_TASK
+            and bool(parse.intent.details.assignee_key)
+            and not parse.intent.task
+            and parse.missing == ["task"]
+        )
+        if (
+            self.agent
+            and not unknown_spoken_assignee
+            and not clear_task
+            and not clear_missing_task
+            and not (parse.status == "ok" and parse.confidence >= 0.99)
+        ):
+            return await self._dispatch_agent(state, text, idempotency_key)
+        return await self._dispatch(state, text, parse, idempotency_key)
+
+    @staticmethod
+    def _split_task_commands(text: str) -> list[str]:
+        """Split explicit sequential commands without splitting a task's own clauses."""
+        pieces = re.split(
+            r"(?:[،,]\s*|\s+)(?=و?(?:قولي|حطي|اعملي|ضيفي|سجلي|خلي|كلفي)\b)",
+            text,
+        )
+        return [
+            re.sub(r"^و(?=(?:قولي|حطي|اعملي|ضيفي|سجلي|خلي|كلفي))", "", p).strip()
+            for p in pieces
+            if p.strip()
+        ]
+
+    def _mentioned_people(self, text: str) -> set[str]:
+        return {
+            person.key
+            for person in self.directory or []
+            if self._assignee_was_spoken(text, person.key, None)
+        }
+
+    async def _draft_batch(
+        self, state: ConversationState, text: str, parts: list[str]
+    ) -> AssistantReply:
+        if len(parts) > 5:
+            return AssistantReply(kind="clarification", text="ممكن تقول لحد خمس تاسكات في المرة؟")
+        parsed = [await self.parser.parse(part) for part in parts]
+        if all(
+            p.status == "ok" and p.intent and p.intent.action is Action.CREATE_TASK for p in parsed
+        ):
+            return await self._stage_review(state, [p.intent for p in parsed], text)
+        if self.agent:
+            return await self._draft_with_agent(state, text)
+        return AssistantReply(kind="clarification", text="ممكن تقول كل تاسك لمين والمطلوب إيه؟")
+
+    async def _draft_with_agent(
+        self, state: ConversationState, text: str, *, revise: bool = False
+    ) -> AssistantReply:
+        from voice_agent.conversation.agent import ReviewTask
+
+        if not self.agent or not hasattr(self.agent, "decide_review"):
+            return AssistantReply(
+                kind="clarification", text="قولّي التصحيح والتاسك المقصودة من فضلك."
+            )
+        current = (
+            [
+                ReviewTask(assignee_key=d.details.assignee_key, task=d.task)
+                for d in state.review_drafts
+            ]
+            if revise
+            else []
+        )
+        try:
+            decision = await self.agent.decide_review(text, current)
+        except Exception as exc:
+            log.warning("conversation.review_agent_fallback", error=repr(exc))
+            return AssistantReply(kind="clarification", text="ممكن تقول كل تاسك لوحدها بشكل أوضح؟")
+        if decision.action == "discard":
+            state.review_drafts.clear()
+            state.review_transcripts.clear()
+            return AssistantReply(kind="declined", text="تمام، مش هسجل التاسكات دي.")
+        if decision.action == "clarify":
+            return AssistantReply(
+                kind="clarification",
+                text=decision.question or "قولّي التعديل على أي تاسك بالظبط؟",
+            )
+        assert self.directory is not None
+        drafts: list[Intent] = []
+        for task in decision.tasks:
+            person = self.directory.get(task.assignee_key)
+            previously_named = revise and any(
+                d.details.assignee_key == task.assignee_key for d in state.review_drafts
+            )
+            if person is None or (
+                not previously_named and not self._assignee_was_spoken(text, person.key, None)
+            ):
+                return AssistantReply(
+                    kind="clarification", text="ممكن تعيد اسم صاحب كل تاسك بوضوح؟"
+                )
+            drafts.append(
+                Intent(
+                    action=Action.CREATE_TASK,
+                    assignee=person.name_en,
+                    task=task.task,
+                    details=IntentDetails(
+                        assignee_key=person.key,
+                        assignee_spoken=person.name_ar,
+                        assignee_gender=person.gender,
+                    ),
+                )
+            )
+        return await self._stage_review(state, drafts, text)
+
+    async def _stage_review(
+        self, state: ConversationState, drafts: list[Intent], text: str
+    ) -> AssistantReply:
+        if not drafts or len(drafts) > 5:
+            return AssistantReply(kind="clarification", text="ممكن تقول لحد خمس تاسكات بوضوح؟")
+        handler = self.commands.get(Action.CREATE_TASK)
+        assert handler is not None
+        for draft in drafts:
+            missing = handler.missing_fields(draft)
+            issues = handler.validate(draft, self.connectors) if not missing else []
+            if missing or issues:
+                return AssistantReply(
+                    kind="clarification",
+                    text="في تاسك مش واضح صاحبها أو المطلوب فيها. ممكن تعيدها؟",
+                )
+        state.review_drafts = [d.model_copy(deep=True) for d in drafts]
+        state.review_transcripts.append(text)
+        state.review_nonce = uuid.uuid4().hex
+        state.pending = None
+        return AssistantReply(kind="review", text=self._review_text(drafts))
+
+    @staticmethod
+    def _review_text(drafts: list[Intent]) -> str:
+        if len(drafts) == 1:
+            draft = drafts[0]
+            return f"هسجل تاسك ل{draft.details.assignee_spoken}: {draft.task}. صح كده؟"
+        ordinals = ["الأول", "التاني", "التالت", "الرابع", "الخامس"]
+        items = [
+            f"{ordinals[i]} ل{draft.details.assignee_spoken}: {draft.task}"
+            for i, draft in enumerate(drafts)
+        ]
+        return "هسجل " + "، و".join(items) + ". صح كده؟"
+
+    async def _handle_review(
+        self, state: ConversationState, text: str, parse: ParseResult
+    ) -> AssistantReply:
+        normalized = normalize_text(text)
+        intent = parse.intent
+        if (intent and intent.action is Action.CONFIRM) or normalized in {
+            "اه صح",
+            "ايوه صح",
+            "ايوا صح",
+            "صح",
+            "صح كده",
+            "تمام صح",
+        }:
+            return await self._confirm_review(state)
+        if intent and intent.action is Action.END_CALL:
+            state.review_drafts.clear()
+            return AssistantReply(
+                kind="end_call",
+                end_call=True,
+                text="تمام، مش هسجل التاسكات اللي لسه ما وافقتش عليها. مع السلامة.",
+            )
+        if normalized in {"بلاش", "الغيه", "الغيهم", "لا بلاش"}:
+            state.review_drafts.clear()
+            return AssistantReply(kind="declined", text="تمام، مش هسجلهم. فيه حاجة تانية؟")
+        if normalized in {"لا", "لا غلط", "غلط", "مش صح"}:
+            return AssistantReply(
+                kind="clarification", text="تمام، قولّي أعدل أي تاسك وإيه التصحيح؟"
+            )
+        if (
+            len(state.review_drafts) == 1
+            and "بعد بكرة" in state.review_drafts[0].task
+            and "لبكره" in normalized
+            and normalized.startswith(("لا", "غلط"))
+        ):
+            draft = state.review_drafts[0].model_copy(deep=True)
+            draft.task = draft.task.replace("بعد بكرة", "بكرة")
+            if draft.details.action_phrase:
+                draft.details.action_phrase = draft.details.action_phrase.replace(
+                    "بعد بكرة", "بكرة"
+                )
+            return await self._stage_review(state, [draft], text)
+        if parse.status == "ok" and intent and intent.action is Action.CREATE_TASK:
+            return await self._stage_review(state, [*state.review_drafts, intent], text)
+        return await self._draft_with_agent(state, text, revise=True)
+
+    async def _confirm_review(self, state: ConversationState) -> AssistantReply:
+        drafts = state.review_drafts[:]
+        handler = self.commands.get(Action.CREATE_TASK)
+        assert handler is not None
+        saved = 0
+        last_job = None
+        for index, draft in enumerate(drafts):
+            key = f"review:{state.session_id}:{state.review_nonce}:{index}"
+            result = await self._accept(
+                state, " | ".join(state.review_transcripts), draft, key, [], handler
+            )
+            if result.kind != "accepted":
+                state.review_drafts = drafts[index:]
+                return AssistantReply(
+                    kind="error",
+                    text=(f"سجلت {saved} تاسك، " if saved else "")
+                    + "بس حصلت مشكلة في الباقي. قول آه عشان أحاول تاني.",
+                )
+            last_job = result.job
+            saved += 1
+        state.review_drafts.clear()
+        state.review_transcripts.clear()
+        state.review_nonce = ""
+        return AssistantReply(
+            kind="accepted",
+            job=last_job,
+            text=f"تمام، سجلت {saved} تاسك" + ("." if saved == 1 else "ات. فيه حاجة تانية؟"),
+        )
 
     async def _dispatch_agent(
         self, state: ConversationState, text: str, key: str | None
@@ -260,7 +492,8 @@ class ConversationEngine:
             for i in range(len(words) - len(parts) + 1):
                 candidate = words[i : i + len(parts)]
                 with_lam = candidate[0] == "ل" + parts[0] and candidate[1:] == parts[1:]
-                if candidate == parts or with_lam:
+                with_waw = candidate[0] in {"و" + parts[0], "ول" + parts[0]}
+                if candidate == parts or with_lam or (with_waw and candidate[1:] == parts[1:]):
                     return True
         return False
 
@@ -363,6 +596,9 @@ class ConversationEngine:
             return AssistantReply(kind="error", text=await self.acks.system_error(), intent=intent)
 
         transcripts = state.pending.transcripts if state.pending else []
+        if self.review_before_submit and intent.action is Action.CREATE_TASK:
+            state.review_transcripts.extend(transcripts)
+            return await self._stage_review(state, [intent], text)
         return await self._accept(state, text, intent, key, transcripts, handler)
 
     async def _accept(

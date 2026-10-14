@@ -19,7 +19,17 @@ During reply playback, the ARI call enables `TALK_DETECT` and records incoming
 audio separately from outgoing speech. Caller speech stops the playback and the
 captured audio becomes the next turn. This was observed on extension 777 with an
 interrupted handset call. Speech during the short synthesis interval before
-playback still needs further capture work.
+playback is captured as a new caller turn. If the caller starts speaking while
+the reply is rendered, the reply is skipped so the correction can be heard.
+
+New tasks are drafted in memory for the active call. The assistant reads every
+draft aloud, asks «صح كده؟», and persists nothing until the caller says yes.
+It can read back up to five tasks at once. A correction revises the draft and
+triggers a fresh readback; a hang-up before approval drops the draft. Once
+approved, jobs are durably accepted one by one, attributed to the verified
+caller, and the worker sends them to Monday. If one acceptance fails, the
+remaining drafts stay in the call for retry. The API `/simulate` returns all
+accepted `job_ids` as well as the last `job_id`.
 
 This host binds ARI and Redis only to `127.0.0.1`. Copy
 `deploy/asterisk-host.override.yml` to `docker-compose.override.yml` on the host;
@@ -40,7 +50,8 @@ mapping is confirmed.
 `AGENT_API_KEY` enables a strict structured decision using the provider selected by
 `AGENT_PROVIDER` (`openai` Responses or `openrouter` chat completions) and `AGENT_MODEL`.
 Without it the deterministic parser is used.
-The model can only select a conversation action, directory key, and task title.
+The model can extract or revise up to five draft tasks using only verified
+directory keys. The caller hears each proposed task before any is submitted.
 Application code validates and persists the job, and the worker alone calls Monday.
 
 Backups of the prior code, `.env`, and dialplan are stored privately under
