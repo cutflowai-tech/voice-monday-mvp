@@ -71,15 +71,9 @@ async def test_last_call_transcript_is_reviewed_as_two_tasks(container):
 
 
 async def test_ambiguous_correction_never_saves_current_draft(container):
-    class ReviewAgent:
-        async def decide_review(self, text, current):
-            assert len(current) == 2
-            return ReviewDecision(action="clarify", tasks=[], question="تقصد تعدل أي تاسك؟")
-
     container.engine.review_before_submit = True
     state = ConversationState()
     await container.engine.handle(state, "حطي لمحسن تاسك ييجي بعد بكرة، وقولي لميكل ييجي بكرة")
-    container.engine.agent = ReviewAgent()
     reply = await container.engine.handle(state, "لا غلط عدليها")
     assert reply.kind == "clarification"
     assert len(state.review_drafts) == 2
@@ -90,12 +84,10 @@ async def test_named_correction_updates_only_target_task(container):
     class ReviewAgent:
         async def decide_review(self, text, current):
             assert "التاني" in text
+            assert len(current) == 1 and current[0].assignee_key == "michael"
             return ReviewDecision(
                 action="draft",
-                tasks=[
-                    current[0],
-                    ReviewTask(assignee_key="michael", task="ييجي الخميس بدل بكرة"),
-                ],
+                tasks=[ReviewTask(assignee_key="michael", task="ييجي الخميس بدل بكرة")],
                 question=None,
             )
 
@@ -103,7 +95,7 @@ async def test_named_correction_updates_only_target_task(container):
     state = ConversationState()
     await container.engine.handle(state, "حطي لمحسن تاسك ييجي بعد بكرة، وقولي لميكل ييجي بكرة")
     container.engine.agent = ReviewAgent()
-    reply = await container.engine.handle(state, "لا غلط، التاني خليه ييجي الخميس بدل بكرة")
+    reply = await container.engine.handle(state, "لا غلط، التاني خليه ييجي الخميس")
     assert reply.kind == "review"
     assert "بعد بكرة" in reply.text and "الخميس" in reply.text
     assert container.store.status_counts() == {}
@@ -111,6 +103,38 @@ async def test_named_correction_updates_only_target_task(container):
     jobs = [container.store.get(job_id) for job_id in state.accepted_job_ids]
     assert "بعد بكرة" in jobs[0].payload["title"]
     assert "الخميس" in jobs[1].payload["title"]
+
+
+async def test_wrong_task_from_model_is_rejected(container):
+    class WrongReviewAgent:
+        async def decide_review(self, text, current):
+            return ReviewDecision(
+                action="draft",
+                tasks=[ReviewTask(assignee_key="mohamed", task="ييجي الخميس")],
+                question=None,
+            )
+
+    container.engine.review_before_submit = True
+    state = ConversationState()
+    await container.engine.handle(state, "حطي لمحسن تاسك ييجي بعد بكرة، وقولي لميكل ييجي بكرة")
+    container.engine.agent = WrongReviewAgent()
+    reply = await container.engine.handle(state, "لا غلط، التاني خليه الخميس")
+    assert reply.kind == "clarification"
+    assert "بعد بكرة" in state.review_drafts[0].task
+    assert "بكرة" in state.review_drafts[1].task
+    assert container.store.status_counts() == {}
+
+
+async def test_date_correction_with_ordinal_changes_only_second_task(container):
+    container.engine.review_before_submit = True
+    state = ConversationState()
+    await container.engine.handle(state, "حطي لمحسن تاسك ييجي بعد بكرة، وقولي لميكل ييجي بكرة")
+    reply = await container.engine.handle(state, "لا غلط، التاني الخميس بدل بكرة")
+    assert reply.kind == "review"
+    assert "بعد بكرة" in state.review_drafts[0].task
+    assert "الخميس" in state.review_drafts[1].task
+    assert "بكرة" not in state.review_drafts[1].task
+    assert container.store.status_counts() == {}
 
 
 async def test_multiple_names_without_clear_separator_ask_or_extract(container):

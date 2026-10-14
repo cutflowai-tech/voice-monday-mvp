@@ -42,6 +42,10 @@ if TYPE_CHECKING:
 
 MAX_UTTERANCE_CHARS = 1000
 MAX_CLARIFICATION_ROUNDS = 2
+DATE_WORDS = re.compile(
+    r"بعد\s+بكر[ةه]|بكر[ةه]|النهارد[ةه]|السبت|الأحد|الاحد|الاتنين|الثلاثاء|التلات|"
+    r"الأربعاء|الاربعاء|الخميس|الجمع[ةه]"
+)
 
 ReplyKind = Literal[
     "accepted",
@@ -267,14 +271,23 @@ class ConversationEngine:
             return AssistantReply(
                 kind="clarification", text="قولّي التصحيح والتاسك المقصودة من فضلك."
             )
-        current = (
-            [
-                ReviewTask(assignee_key=d.details.assignee_key, task=d.task)
-                for d in state.review_drafts
-            ]
+        target_index = self._correction_target(text, state.review_drafts) if revise else None
+        if revise and len(state.review_drafts) > 1 and target_index is None:
+            return AssistantReply(
+                kind="clarification", text="تقصد تعدل الأول ولا التاني؟ قولّي الرقم والتصحيح مع بعض."
+            )
+        source_drafts = (
+            (
+                [state.review_drafts[target_index]]
+                if target_index is not None
+                else state.review_drafts
+            )
             if revise
             else []
         )
+        current = [
+            ReviewTask(assignee_key=d.details.assignee_key, task=d.task) for d in source_drafts
+        ]
         try:
             decision = await self.agent.decide_review(text, current)
         except Exception as exc:
@@ -289,12 +302,16 @@ class ConversationEngine:
                 kind="clarification",
                 text=decision.question or "قولّي التعديل على أي تاسك بالظبط؟",
             )
+        if revise and len(decision.tasks) != len(source_drafts):
+            return AssistantReply(
+                kind="clarification", text="عشان ما أغيّرش تاسك تانية، قولي التعديل على أي واحدة؟"
+            )
         assert self.directory is not None
         drafts: list[Intent] = []
         for task in decision.tasks:
             person = self.directory.get(task.assignee_key)
             previously_named = revise and any(
-                d.details.assignee_key == task.assignee_key for d in state.review_drafts
+                d.details.assignee_key == task.assignee_key for d in source_drafts
             )
             if person is None or (
                 not previously_named and not self._assignee_was_spoken(text, person.key, None)
@@ -314,6 +331,10 @@ class ConversationEngine:
                     ),
                 )
             )
+        if target_index is not None:
+            full_drafts = state.review_drafts[:]
+            full_drafts[target_index] = drafts[0]
+            drafts = full_drafts
         return await self._stage_review(state, drafts, text)
 
     async def _stage_review(
@@ -349,6 +370,39 @@ class ConversationEngine:
         ]
         return "هسجل " + "، و".join(items) + ". صح كده؟"
 
+    def _correction_target(self, text: str, drafts: list[Intent]) -> int | None:
+        normalized = normalize_text(text)
+        for index, names in enumerate(
+            (("الاول", "اول"), ("التاني", "الثاني"), ("التالت", "الثالث"), ("الرابع",), ("الخامس",))
+        ):
+            if index < len(drafts) and any(re.search(rf"\b{name}\b", normalized) for name in names):
+                return index
+        matches = [
+            i
+            for i, draft in enumerate(drafts)
+            if draft.details.assignee_key
+            and self._assignee_was_spoken(text, draft.details.assignee_key, None)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def _simple_date_correction(self, state: ConversationState, text: str) -> Intent | None:
+        target = self._correction_target(text, state.review_drafts)
+        if target is None or "بدل" not in text:
+            return None
+        before, after = text.split("بدل", 1)
+        new_dates = DATE_WORDS.findall(before)
+        old_dates = DATE_WORDS.findall(after)
+        if not new_dates or not old_dates:
+            return None
+        new_date, old_date = new_dates[-1], old_dates[0]
+        draft = state.review_drafts[target].model_copy(deep=True)
+        if not draft.task or old_date not in draft.task:
+            return None
+        draft.task = draft.task.replace(old_date, new_date, 1)
+        if draft.details.action_phrase:
+            draft.details.action_phrase = draft.details.action_phrase.replace(old_date, new_date, 1)
+        return draft
+
     async def _handle_review(
         self, state: ConversationState, text: str, parse: ParseResult
     ) -> AssistantReply:
@@ -377,6 +431,12 @@ class ConversationEngine:
             return AssistantReply(
                 kind="clarification", text="تمام، قولّي أعدل أي تاسك وإيه التصحيح؟"
             )
+        date_revision = self._simple_date_correction(state, text)
+        if date_revision:
+            target = self._correction_target(text, state.review_drafts)
+            drafts = state.review_drafts[:]
+            drafts[target] = date_revision
+            return await self._stage_review(state, drafts, text)
         if (
             len(state.review_drafts) == 1
             and "بعد بكرة" in state.review_drafts[0].task
