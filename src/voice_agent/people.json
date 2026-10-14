@@ -13,5 +13,7 @@
   {"key": "youssef", "name_en": "Youssef", "name_ar": "يوسف", "gender": "m", "aliases": ["Yousef"]},
   {"key": "karim", "name_en": "Karim", "name_ar": "كريم", "gender": "m", "aliases": []},
   {"key": "mona", "name_en": "Mona", "name_ar": "منى", "gender": "f", "aliases": []},
-  {"key": "fatma", "name_en": "Fatma", "name_ar": "فاطمة", "gender": "f", "aliases": ["Fatima"]}
+  {"key": "fatma", "name_en": "Fatma", "name_ar": "فاطمة", "gender": "f", "aliases": ["Fatima"]},
+  {"key": "office_boy", "name_en": "Office Boy", "name_ar": "Office Boy", "gender": "m", "aliases": []},
+  {"key": "workstation", "name_en": "Workstation", "name_ar": "Workstation", "gender": "m", "aliases": []}
 ]

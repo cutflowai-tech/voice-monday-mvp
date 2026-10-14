@@ -47,3 +47,41 @@ async def test_agent_uses_strict_schema_and_verified_directory(directory):
     assert decision.assignee_key == "ahmed"
     assert "2 تيرا" in decision.task
     await agent.aclose()
+
+
+async def test_openrouter_uses_strict_chat_completion(directory):
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/chat/completions")
+        body = json.loads(request.content)
+        assert body["response_format"]["json_schema"]["strict"] is True
+        assert body["provider"]["require_parameters"] is True
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action": "submit",
+                                    "assignee_key": "mohamed",
+                                    "task": "شراء هارد 2 تيرا",
+                                    "question": None,
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    agent = StructuredTaskAgent(
+        api_key="test",
+        model="openai/gpt-4.1-mini",
+        provider="openrouter",
+        directory=directory,
+        transport=httpx.MockTransport(respond),
+    )
+    decision = await agent.decide("حطي لمحمد يشتري هارد", None)
+    assert decision.assignee_key == "mohamed"
+    await agent.aclose()

@@ -115,6 +115,7 @@ class Settings(BaseSettings):
     caller_directory_file: str = ""
     unknown_caller_policy: Literal["anonymous", "reject"] = "anonymous"
     agent_api_key: str = ""
+    agent_provider: Literal["openai", "openrouter"] = "openai"
     agent_model: str = "gpt-4.1-mini"
     agent_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
     log_level: str = "INFO"

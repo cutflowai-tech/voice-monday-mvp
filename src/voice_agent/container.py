@@ -121,6 +121,7 @@ def build_container(
     agent = (
         StructuredTaskAgent(
             api_key=settings.agent_api_key,
+            provider=settings.agent_provider,
             model=settings.agent_model,
             directory=directory,
             timeout_seconds=settings.agent_timeout_seconds,

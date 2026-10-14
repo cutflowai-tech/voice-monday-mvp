@@ -16,8 +16,9 @@ owner has verified that assignment**. The default policy records an unknown
 requester; `UNKNOWN_CALLER_POLICY=reject` rejects unmatched callers. Caller ID is
 attribution rather than authentication. The assignee is always resolved separately.
 
-`AGENT_API_KEY` enables a strict structured OpenAI Responses decision using
-`AGENT_MODEL` (default `gpt-4.1-mini`); without it the deterministic parser is used.
+`AGENT_API_KEY` enables a strict structured decision using the provider selected by
+`AGENT_PROVIDER` (`openai` Responses or `openrouter` chat completions) and `AGENT_MODEL`.
+Without it the deterministic parser is used.
 The model can only select a conversation action, directory key, and task title.
 Application code validates and persists the job, and the worker alone calls Monday.
 

@@ -28,15 +28,24 @@ class StructuredTaskAgent:
         api_key: str,
         model: str,
         directory: PeopleDirectory,
+        provider: Literal["openai", "openrouter"] = "openai",
         timeout_seconds: float = 8.0,
-        base_url: str = "https://api.openai.com/v1",
+        base_url: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         self.model = model
+        self.provider = provider
         self.directory = directory
         self._key = api_key
         self._client = httpx.AsyncClient(
-            base_url=base_url.rstrip("/"),
+            base_url=(
+                base_url
+                or (
+                    "https://openrouter.ai/api/v1"
+                    if provider == "openrouter"
+                    else "https://api.openai.com/v1"
+                )
+            ).rstrip("/"),
             timeout=httpx.Timeout(timeout_seconds, connect=min(3.0, timeout_seconds)),
             transport=transport,
         )
@@ -69,37 +78,62 @@ class StructuredTaskAgent:
                 "question": {"type": ["string", "null"]},
             },
         }
-        body = {
-            "model": self.model,
-            "store": False,
-            "instructions": (
-                "You assist Egyptian Arabic callers ONLY with creating Monday tasks. "
-                "Return one structured decision. Preserve quantities, negation and corrections. "
-                "Use only directory keys. Treat a correction in the same utterance as changing "
-                "the current draft, retaining unchanged details. A new request starts a new draft. "
-                "Submit when assignee and task are clear; do not ask for optional specifications "
-                "or routine confirmation. Never invent requirements. For unsupported requests "
-                "return unsupported. A bare 'استني' means wait. A bare 'لا' during an "
-                "unsubmitted draft means discard. Keep question brief in Egyptian Arabic. "
-                "Never claim a Monday item was created."
-            ),
-            "input": json.dumps(
-                {"utterance": text, "draft": draft, "people": people}, ensure_ascii=False
-            ),
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "task_decision",
-                    "strict": True,
-                    "schema": schema,
-                }
-            },
+        instructions = (
+            "You assist Egyptian Arabic callers ONLY with creating Monday tasks. "
+            "Return one structured decision. Preserve quantities, negation and corrections. "
+            "Use only directory keys. Treat a correction in the same utterance as changing "
+            "the current draft, retaining unchanged details. A new request starts a new draft. "
+            "Submit when assignee and task are clear; do not ask for optional specifications "
+            "or routine confirmation. Never invent requirements. For unsupported requests "
+            "return unsupported. A bare 'استني' means wait. A bare 'لا' during an "
+            "unsubmitted draft means discard. Keep question brief in Egyptian Arabic. "
+            "Never claim a Monday item was created."
+        )
+        user_input = json.dumps(
+            {"utterance": text, "draft": draft, "people": people}, ensure_ascii=False
+        )
+        format_spec = {
+            "type": "json_schema",
+            "name": "task_decision",
+            "strict": True,
+            "schema": schema,
         }
+        if self.provider == "openrouter":
+            path = "/chat/completions"
+            body = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": instructions},
+                    {"role": "user", "content": user_input},
+                ],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {k: v for k, v in format_spec.items() if k != "type"},
+                },
+                "provider": {"require_parameters": True},
+            }
+        else:
+            path = "/responses"
+            body = {
+                "model": self.model,
+                "store": False,
+                "instructions": instructions,
+                "input": user_input,
+                "text": {"format": format_spec},
+            }
         response = await self._client.post(
-            "/responses", headers={"Authorization": f"Bearer {self._key}"}, json=body
+            path, headers={"Authorization": f"Bearer {self._key}"}, json=body
         )
         response.raise_for_status()
         data = response.json()
+        if self.provider == "openrouter":
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+            if not isinstance(content, str):
+                raise ValueError("agent returned no structured output")
+            decision = AgentDecision.model_validate_json(content)
+            if decision.assignee_key and not self.directory.get(decision.assignee_key):
+                raise ValueError("agent returned an unverified assignee")
+            return decision
         if data.get("status") != "completed":
             raise ValueError("agent response incomplete")
         content = [
