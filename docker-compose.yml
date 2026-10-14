@@ -1,0 +1,83 @@
+name: voice-monday-agent
+
+# One image for api, worker and ari. Only `api` builds it (parallel builds of the same
+# tag collide); the others reuse the local image.
+x-app: &app
+  image: voice-monday-agent:latest
+  pull_policy: never
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - app-data:/app/data
+  depends_on:
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    # AOF persistence so queued job ids survive a Redis restart (SQLite stays the source of truth).
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    <<: *app
+    build:
+      context: .
+      target: base
+    pull_policy: missing
+    command: ["api"]
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    # SIGTERM -> the worker finishes the in-flight job, then exits.
+    stop_grace_period: 45s
+
+  # Telephony is opt-in: `docker compose --profile telephony up -d`
+  ari:
+    <<: *app
+    command: ["ari"]
+    profiles: ["telephony"]
+    stop_grace_period: 20s
+    environment:
+      ASTERISK_SOUNDS_DIR: /sounds
+    volumes:
+      - app-data:/app/data
+      - whisper-models:/models
+      # Must be the folder Asterisk reads (ASTERISK_SOUNDS_URI_PREFIX) — see docs/ASTERISK.md
+      - ${ASTERISK_SOUNDS_HOST_DIR:-./data/sounds}:/sounds
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  tests:
+    build:
+      context: .
+      target: dev
+    image: voice-monday-agent:dev
+    profiles: ["test"]
+    volumes:
+      - .:/app
+    environment:
+      MONDAY_MODE: mock
+
+volumes:
+  app-data:
+  redis-data:
+  whisper-models:

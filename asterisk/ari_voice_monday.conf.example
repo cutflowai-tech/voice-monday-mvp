@@ -1,0 +1,10 @@
+; ---------------------------------------------------------------------------
+; voice-monday-agent ARI user (generated). Append to /etc/asterisk/ari.conf
+; (FreePBX: /etc/asterisk/ari_additional_custom.conf). Keep this file private.
+; The [general] section of ari.conf must contain `enabled = yes`.
+; ---------------------------------------------------------------------------
+[voice-monday]
+type = user
+read_only = no
+password = CHANGE_ME_TO_A_LONG_RANDOM_PASSWORD
+password_format = plain

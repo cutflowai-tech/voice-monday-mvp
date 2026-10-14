@@ -1,0 +1,19 @@
+# Override for running the agent ON the Asterisk host (Linux) while keeping
+# ARI bound to 127.0.0.1 only:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.pbx-host.yml --profile telephony up -d
+#
+# The ari container shares the host network, so ASTERISK_ARI_URL=http://127.0.0.1:8088
+# works without exposing port 8088 to any network. Redis is published on localhost
+# only so the host-networked container can reach it.
+services:
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  ari:
+    network_mode: host
+    extra_hosts: !reset []
+    environment:
+      ASTERISK_SOUNDS_DIR: /sounds
+      REDIS_URL: redis://127.0.0.1:6379/0

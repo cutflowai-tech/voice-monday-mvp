@@ -1,0 +1,11 @@
+; ---------------------------------------------------------------------------
+; Asterisk built-in HTTP server, required by ARI. Merge into the EXISTING
+; [general] section of /etc/asterisk/http.conf (do not create a second one).
+; FreePBX: Settings > Advanced Settings > "Asterisk Builtin mini-HTTP server".
+; ---------------------------------------------------------------------------
+[general]
+enabled = yes
+; 127.0.0.1 if the agent runs on the PBX host; otherwise the PBX LAN IP.
+; Never expose 8088 to the internet.
+bindaddr = 127.0.0.1
+bindport = 8088

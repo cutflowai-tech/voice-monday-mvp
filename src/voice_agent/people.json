@@ -1,0 +1,17 @@
+[
+  {"key": "mohamed", "name_en": "Mohamed", "name_ar": "محمد", "gender": "m",
+   "aliases": ["محمّد", "مُحمد", "حمادة", "Mohammed", "Muhammad"]},
+  {"key": "michael", "name_en": "Michael", "name_ar": "مايكل", "gender": "m",
+   "aliases": ["ميكل", "ميكايل", "مايكال"]},
+  {"key": "amir", "name_en": "Amir", "name_ar": "أمير", "gender": "m", "aliases": []},
+  {"key": "ziad", "name_en": "Ziad", "name_ar": "زياد", "gender": "m", "aliases": ["Zyad", "Zeyad"]},
+  {"key": "ahmed", "name_en": "Ahmed", "name_ar": "أحمد", "gender": "m", "aliases": ["Ahmad"]},
+  {"key": "sara", "name_en": "Sara", "name_ar": "سارة", "gender": "f", "aliases": ["Sarah"]},
+  {"key": "mahmoud", "name_en": "Mahmoud", "name_ar": "محمود", "gender": "m", "aliases": []},
+  {"key": "mostafa", "name_en": "Mostafa", "name_ar": "مصطفى", "gender": "m", "aliases": ["Mustafa"]},
+  {"key": "omar", "name_en": "Omar", "name_ar": "عمر", "gender": "m", "aliases": []},
+  {"key": "youssef", "name_en": "Youssef", "name_ar": "يوسف", "gender": "m", "aliases": ["Yousef"]},
+  {"key": "karim", "name_en": "Karim", "name_ar": "كريم", "gender": "m", "aliases": []},
+  {"key": "mona", "name_en": "Mona", "name_ar": "منى", "gender": "f", "aliases": []},
+  {"key": "fatma", "name_en": "Fatma", "name_ar": "فاطمة", "gender": "f", "aliases": ["Fatima"]}
+]
