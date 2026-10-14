@@ -117,6 +117,12 @@ class VoiceLoop:
             if audio is None:
                 continue  # silence; inactivity timer keeps running
             utterance_ended_at = time.monotonic()
+            try:
+                await self.channel.working()
+            except Exception as exc:
+                log.warning(
+                    "call.working_cue_failed", call_id=self.channel.call_id, error=repr(exc)
+                )
 
             try:
                 transcript = await self.stt.transcribe(audio, language=self.config.language)

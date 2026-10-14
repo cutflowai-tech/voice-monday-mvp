@@ -41,6 +41,10 @@ class CallChannel(ABC):
         """Check per-call prerequisites while the phone is still ringing."""
         return None
 
+    async def working(self) -> None:
+        """Give a brief receipt cue while the utterance is being understood."""
+        return None
+
     @abstractmethod
     async def say(self, text: str) -> bool:
         """Speak ``text``. Returns False if speech could not be rendered (fallback played)."""
@@ -62,6 +66,7 @@ class AriCallChannel(CallChannel):
         channel: dict[str, Any],
         speech: SpeechRenderer,
         ready_cue_media: str | None = None,
+        working_cue_media: str | None = None,
     ):
         self.ari = ari
         self.bus = bus
@@ -70,6 +75,9 @@ class AriCallChannel(CallChannel):
         self.caller = (channel.get("caller") or {}).get("number", "")
         self.speech = speech
         self.ready_cue_media = ready_cue_media
+        self.working_cue_media = working_cue_media
+        self._working_playback_id: str | None = None
+        self._working_future: asyncio.Future | None = None
         self._hangup = asyncio.Event()
         self._turn = 0
         bus.on_channel(self.channel_id, self._on_channel_event)
@@ -103,6 +111,36 @@ class AriCallChannel(CallChannel):
             hangup.cancel()
         return future in done
 
+    async def working(self) -> None:
+        if not self.active or not self.working_cue_media:
+            return
+        await self._stop_working()
+        playback_id = uuid.uuid4().hex
+        self._working_playback_id = playback_id
+        self._working_future = self.bus.expect("playback", playback_id)
+        try:
+            await self.ari.play(self.channel_id, self.working_cue_media, playback_id)
+            log.info("call.working_cue_started", call_id=self.call_id)
+        except AriError as exc:
+            self.bus.discard("playback", playback_id)
+            self._working_playback_id = None
+            self._working_future = None
+            log.warning("call.working_cue_failed", call_id=self.call_id, error=str(exc))
+
+    async def _stop_working(self) -> None:
+        playback_id = self._working_playback_id
+        future = self._working_future
+        if playback_id is None:
+            return
+        self._working_playback_id = None
+        self._working_future = None
+        if future is not None and not future.done():
+            try:
+                await self.ari.stop_playback(playback_id)
+            except AriError as exc:
+                log.warning("call.working_cue_stop_failed", call_id=self.call_id, error=str(exc))
+        self.bus.discard("playback", playback_id)
+
     async def say(self, text: str) -> bool:
         if not self.active:
             raise CallHungUp
@@ -113,6 +151,7 @@ class AriCallChannel(CallChannel):
         except Exception as exc:
             log.error("call.tts_failed", call_id=self.call_id, error=repr(exc))
             return False
+        await self._stop_working()
         playback_id = uuid.uuid4().hex
         future = self.bus.expect("playback", playback_id)
         try:
@@ -213,4 +252,6 @@ class AriCallChannel(CallChannel):
         self._hangup.set()
 
     def close(self) -> None:
+        if self._working_playback_id:
+            self.bus.discard("playback", self._working_playback_id)
         self.bus.remove_channel(self.channel_id)

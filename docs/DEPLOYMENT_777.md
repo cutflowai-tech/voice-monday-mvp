@@ -10,6 +10,9 @@ to the Stasis application. For each call it checks the channel while it rings,
 then answers and starts recording before playing the cue. Asterisk's channel
 recording captures incoming audio only, so callers can begin speaking as the cue
 plays. The short answer-to-record transition remains to be measured with a handset.
+After an utterance is recorded, a pre-rendered "سمعتك، لحظة" receipt cue starts
+while recognition and task handling proceed. The final answer cancels any
+unfinished receipt cue before it plays.
 
 This host binds ARI and Redis only to `127.0.0.1`. Copy
 `deploy/asterisk-host.override.yml` to `docker-compose.override.yml` on the host;

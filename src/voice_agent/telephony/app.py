@@ -34,11 +34,13 @@ class AriApplication:
         self.sessions: dict[str, asyncio.Task] = {}
         self._draining = False
         self.ready_cue_media: str | None = None
+        self.working_cue_media: str | None = None
 
     async def run(self, stop: asyncio.Event) -> None:
         info = await self.ari.info()
         try:
             self.ready_cue_media = await self.speech.render("معاك")
+            self.working_cue_media = await self.speech.render("سمعتك، لحظة")
         except Exception as exc:
             log.warning("ari.ready_cue_unavailable", error=repr(exc))
         log.info(
@@ -81,6 +83,7 @@ class AriApplication:
             channel=channel,
             speech=self.speech,
             ready_cue_media=self.ready_cue_media,
+            working_cue_media=self.working_cue_media,
         )
         task = asyncio.create_task(self._run_call(call), name=f"call-{channel_id}")
         self.sessions[channel_id] = task

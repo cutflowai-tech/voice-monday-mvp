@@ -151,6 +151,9 @@ class FakeAri:
             self.bus.dispatch, {"type": "PlaybackFinished", "playback": {"id": playback_id}}
         )
 
+    async def stop_playback(self, playback_id):
+        self.requests.append(("stop_playback", playback_id))
+
     async def record(self, channel_id, name, **kwargs):
         self.requests.append(("record", name, kwargs))
         event = {"type": "RecordingFinished", "recording": {"name": name, "duration": 3}}
@@ -211,6 +214,29 @@ async def test_ready_cue_starts_only_after_first_recording_is_active():
     assert ari.requests[1][1] == "sound:voice-monday/ready"
     await channel.listen(max_seconds=10, max_silence_seconds=2)
     assert sum(r[0] == "play" for r in ari.requests) == 1
+
+
+async def test_final_reply_stops_unfinished_working_cue():
+    class SlowCueAri(FakeAri):
+        async def play(self, channel_id, media, playback_id):
+            self.requests.append(("play", media))
+            if media != "sound:voice-monday/working":
+                asyncio.get_running_loop().call_soon(
+                    self.bus.dispatch, {"type": "PlaybackFinished", "playback": {"id": playback_id}}
+                )
+
+    bus = AriEventBus()
+    ari = SlowCueAri(bus)
+    channel = AriCallChannel(
+        ari=ari,
+        bus=bus,
+        channel={"id": "c2"},
+        speech=StaticRenderer(),
+        working_cue_media="sound:voice-monday/working",
+    )
+    await channel.working()
+    assert await channel.say("تمام") is True
+    assert [r[0] for r in ari.requests] == ["play", "stop_playback", "play"]
 
 
 async def test_ari_channel_does_not_beep_when_tts_fails():

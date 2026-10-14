@@ -20,6 +20,7 @@ class FakeChannel(CallChannel):
         self.call_id = "fake-call"
         self.script = list(script)
         self.said: list[str] = []
+        self.working_cues = 0
         self.answered = False
         self.hung_up_by_agent = False
         self._active = True
@@ -37,6 +38,9 @@ class FakeChannel(CallChannel):
             raise CallHungUp
         self.said.append(text)
         return self.tts_ok
+
+    async def working(self) -> None:
+        self.working_cues += 1
 
     async def listen(self, *, max_seconds: int, max_silence_seconds: int) -> bytes | None:
         if not self._active:
@@ -92,6 +96,7 @@ async def test_call_stays_active_after_task_and_accepts_more(container, worker, 
     assert reason == "caller_hangup"
     assert channel.answered and not channel.hung_up_by_agent
     assert len(channel.said) == 2
+    assert channel.working_cues == 2
     assert "محمد" in channel.said[0] and "أحمد" in channel.said[1]
     assert len(loop.state.accepted_job_ids) == 2
 
