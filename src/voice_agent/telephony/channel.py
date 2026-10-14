@@ -147,6 +147,7 @@ class AriCallChannel(CallChannel):
                 max_duration_seconds=max_seconds,
                 max_silence_seconds=max_silence_seconds,
             )
+            log.info("call.recording_started", call_id=self.call_id, turn=self._turn)
             finished = await self._wait(future, wait_seconds=max_seconds + 10)
             if not finished and not self.active:
                 # Caller hung up mid-sentence: give Asterisk a moment to store the file.
