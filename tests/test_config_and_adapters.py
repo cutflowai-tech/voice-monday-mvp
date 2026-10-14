@@ -145,6 +145,13 @@ class FakeAri:
     async def answer(self, channel_id):
         self.requests.append(("answer", channel_id))
 
+    async def get_channel(self, channel_id):
+        self.requests.append(("get_channel", channel_id))
+        return {"id": channel_id}
+
+    async def set_channel_var(self, channel_id, variable, value):
+        self.requests.append(("set_channel_var", variable, value))
+
     async def play(self, channel_id, media, playback_id):
         self.requests.append(("play", media))
         asyncio.get_running_loop().call_soon(
@@ -153,6 +160,10 @@ class FakeAri:
 
     async def stop_playback(self, playback_id):
         self.requests.append(("stop_playback", playback_id))
+
+    async def stop_recording(self, name):
+        self.requests.append(("stop_recording", name))
+        self.bus.dispatch({"type": "RecordingFinished", "recording": {"name": name}})
 
     async def record(self, channel_id, name, **kwargs):
         self.requests.append(("record", name, kwargs))
@@ -237,6 +248,42 @@ async def test_final_reply_stops_unfinished_working_cue():
     await channel.working()
     assert await channel.say("تمام") is True
     assert [r[0] for r in ari.requests] == ["play", "stop_playback", "play"]
+
+
+async def test_speech_during_playback_interrupts_and_is_preserved():
+    class TalkingAri(FakeAri):
+        async def record(self, channel_id, name, **kwargs):
+            self.requests.append(("record", name, kwargs))
+
+        async def play(self, channel_id, media, playback_id):
+            self.requests.append(("play", media))
+            asyncio.get_running_loop().call_soon(
+                self.bus.dispatch,
+                {"type": "ChannelTalkingStarted", "channel": {"id": channel_id}},
+            )
+            asyncio.get_running_loop().call_soon(
+                self.bus.dispatch,
+                {"type": "ChannelTalkingFinished", "channel": {"id": channel_id}},
+            )
+
+    bus = AriEventBus()
+    ari = TalkingAri(bus)
+    channel = AriCallChannel(ari=ari, bus=bus, channel={"id": "c3"}, speech=StaticRenderer())
+    await channel.prepare()
+    assert await channel.say("رد طويل") is True
+    assert any(r[0] == "stop_playback" for r in ari.requests)
+    assert await channel.listen(max_seconds=10, max_silence_seconds=2) == b"RIFF" + b"\x00" * 4000
+    assert sum(r[0] == "record" for r in ari.requests) == 1
+
+
+async def test_normal_playback_discards_inbound_capture():
+    bus = AriEventBus()
+    ari = FakeAri(bus)
+    channel = AriCallChannel(ari=ari, bus=bus, channel={"id": "c4"}, speech=StaticRenderer())
+    await channel.prepare()
+    assert await channel.say("تمام") is True
+    assert any(r[0] == "stop_recording" for r in ari.requests)
+    assert channel._pending_audio is None
 
 
 async def test_ari_channel_does_not_beep_when_tts_fails():

@@ -78,6 +78,11 @@ class AriCallChannel(CallChannel):
         self.working_cue_media = working_cue_media
         self._working_playback_id: str | None = None
         self._working_future: asyncio.Future | None = None
+        self._barge_in_enabled = False
+        self._talk_started = asyncio.Event()
+        self._talk_finished = asyncio.Event()
+        self._talking = False
+        self._pending_audio: bytes | None = None
         self._hangup = asyncio.Event()
         self._turn = 0
         bus.on_channel(self.channel_id, self._on_channel_event)
@@ -85,6 +90,13 @@ class AriCallChannel(CallChannel):
     def _on_channel_event(self, event: dict[str, Any]) -> None:
         if event.get("type") in HANGUP_EVENTS:
             self._hangup.set()
+        elif event.get("type") == "ChannelTalkingStarted":
+            self._talking = True
+            self._talk_started.set()
+            self._talk_finished.clear()
+        elif event.get("type") == "ChannelTalkingFinished":
+            self._talking = False
+            self._talk_finished.set()
 
     @property
     def active(self) -> bool:
@@ -99,6 +111,11 @@ class AriCallChannel(CallChannel):
         # ARI recording requires an answered channel. Check its presence first,
         # then make the answer -> record transition without intervening playback.
         await self.ari.get_channel(self.channel_id)
+        try:
+            await self.ari.set_channel_var(self.channel_id, "TALK_DETECT(set)", "1500")
+            self._barge_in_enabled = True
+        except AriError as exc:
+            log.warning("call.talk_detect_unavailable", call_id=self.call_id, error=str(exc))
 
     async def _wait(self, future: asyncio.Future, wait_seconds: float) -> bool:
         """Wait for ``future`` or hangup. Returns True if the future completed."""
@@ -154,6 +171,26 @@ class AriCallChannel(CallChannel):
         await self._stop_working()
         playback_id = uuid.uuid4().hex
         future = self.bus.expect("playback", playback_id)
+        capture_name: str | None = None
+        capture_future: asyncio.Future | None = None
+        if self._barge_in_enabled:
+            self._talk_started.clear()
+            self._talk_finished.clear()
+            capture_name = f"vm-barge-{uuid.uuid4().hex}"
+            capture_future = self.bus.expect("recording", capture_name)
+            try:
+                await self.ari.record(
+                    self.channel_id,
+                    capture_name,
+                    fmt="wav",
+                    max_duration_seconds=60,
+                    max_silence_seconds=0,
+                )
+            except AriError as exc:
+                self.bus.discard("recording", capture_name)
+                capture_name = None
+                capture_future = None
+                log.warning("call.barge_capture_unavailable", call_id=self.call_id, error=str(exc))
         try:
             await self.ari.play(self.channel_id, media, playback_id)
             log.info(
@@ -162,20 +199,83 @@ class AriCallChannel(CallChannel):
                 render_and_start_ms=round((time.monotonic() - started_at) * 1000),
             )
             # Generous upper bound: ~0.15 s per character of Arabic speech + margin.
-            finished = await self._wait(future, wait_seconds=10 + len(text) * 0.15)
+            timeout = 10 + len(text) * 0.15
+            if capture_name:
+                finished, interrupted = await self._wait_for_talk_or_playback(future, timeout)
+                if interrupted:
+                    await self.ari.stop_playback(playback_id)
+                    log.info("call.playback_interrupted", call_id=self.call_id)
+                    if self._talking:
+                        await self._wait_for_talk_end(20.0)
+                self._pending_audio = await self._finish_barge_capture(
+                    capture_name, capture_future, keep=interrupted
+                )
+                capture_name = None
+            else:
+                finished = await self._wait(future, wait_seconds=timeout)
         except AriError as exc:
             if not self.active or exc.status == 404:
                 raise CallHungUp from exc
             raise
         finally:
+            if capture_name:
+                await self._finish_barge_capture(capture_name, capture_future, keep=False)
             self.bus.discard("playback", playback_id)
         if not finished and not self.active:
             raise CallHungUp
         return ok
 
+    async def _wait_for_talk_or_playback(
+        self, playback: asyncio.Future, wait_seconds: float
+    ) -> tuple[bool, bool]:
+        talk = asyncio.create_task(self._talk_started.wait())
+        hangup = asyncio.create_task(self._hangup.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {playback, talk, hangup},
+                timeout=wait_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            return playback in done, talk in done
+        finally:
+            talk.cancel()
+            hangup.cancel()
+
+    async def _wait_for_talk_end(self, wait_seconds: float) -> None:
+        ended = asyncio.create_task(self._talk_finished.wait())
+        hangup = asyncio.create_task(self._hangup.wait())
+        try:
+            await asyncio.wait(
+                {ended, hangup}, timeout=wait_seconds, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            ended.cancel()
+            hangup.cancel()
+
+    async def _finish_barge_capture(
+        self, name: str, future: asyncio.Future | None, *, keep: bool
+    ) -> bytes | None:
+        try:
+            await self.ari.stop_recording(name)
+            if future and not future.done():
+                await self._wait_plain(future, 2.0)
+            if not keep:
+                return None
+            audio = await self.ari.get_stored_recording(name)
+            return audio if len(audio) > 1000 else None
+        except AriError as exc:
+            log.warning("call.barge_capture_failed", call_id=self.call_id, error=str(exc))
+            return None
+        finally:
+            self.bus.discard("recording", name)
+            await self._safe_delete(name)
+
     async def listen(self, *, max_seconds: int, max_silence_seconds: int) -> bytes | None:
         if not self.active:
             raise CallHungUp
+        if self._pending_audio is not None:
+            audio, self._pending_audio = self._pending_audio, None
+            return audio
         self._turn += 1
         safe_channel = re.sub(r"[^A-Za-z0-9_-]", "-", self.channel_id)
         name = f"vm-{safe_channel}-{self._turn}-{uuid.uuid4().hex[:6]}"
