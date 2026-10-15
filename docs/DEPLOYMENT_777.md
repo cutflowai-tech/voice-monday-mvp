@@ -1,5 +1,16 @@
 # Assistant extension 777
 
+> **Update 2026-10-15:** extensions **777 and 778 both route to Sarah**, the ElevenLabs
+> agent (see [ELEVENLABS_AGENT.md](ELEVENLABS_AGENT.md)). The ARI assistant described
+> below was retired at the owner's request:
+> - its PBX route was removed with `sudo scripts/pbx-test-route.sh revert`, which also
+>   removed the ARI user and turned the HTTP server off;
+> - its `ari` container was removed.
+>
+> Don't start compose with `--profile telephony` unless you mean to bring it back (re-run
+> `pbx-test-route.sh apply` first). Use `up -d api worker redis` plus
+> `--profile agent-quick up -d el-bridge`.
+
 The observed host on 2026-10-14 is `wcds@192.168.0.118`, running plain Asterisk
 22.5.2 and Docker Compose. Its calling context is `office-internal`. Extension
 777 now routes to `Stasis(voice-monday-agent)` without an early `Answer()` or

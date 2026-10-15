@@ -251,6 +251,9 @@ def test_sarah_greets_known_callers_by_name_and_varies_it():
     assert known["type"] == "conversation_initiation_client_data"
     variables = known["dynamic_variables"]
     assert variables["caller_id"] == "102" and variables["caller_name"] == "أحمد"
+    assert variables["caller_gender"] == "male"
+    assert bridge.initiation("105")["dynamic_variables"]["caller_gender"] == "female"
+    assert bridge.initiation(None)["dynamic_variables"]["caller_gender"] == "unknown"
     assert "أحمد" in variables["opening"]
     openings = {bridge.initiation("102")["dynamic_variables"]["opening"] for _ in range(60)}
     assert len(openings) >= 3  # not the same greeting every call

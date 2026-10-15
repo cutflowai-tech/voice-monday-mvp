@@ -87,7 +87,19 @@ async def test_first_sync_creates_everything_with_documented_shapes(el_settings,
     agent = agent_body["conversation_config"]
     assert agent["agent"]["first_message"] == "{{opening}}"
     placeholders = agent["agent"]["dynamic_variables"]["dynamic_variable_placeholders"]
-    assert set(placeholders) == {"opening", "caller_name", "caller_id", "ack_hint", "done_hint"}
+    assert set(placeholders) == {
+        "opening",
+        "caller_name",
+        "caller_id",
+        "caller_gender",
+        "ack_hint",
+        "done_hint",
+    }
+    prompt_text = agent["agent"]["prompt"]["prompt"]
+    assert "{{caller_gender}}" in prompt_text and "أبغى" in prompt_text  # Gulf words banned
+    assert agent["tts"]["expressive_mode"] is True
+    assert {t["tag"] for t in agent["tts"]["suggested_audio_tags"]} >= {"[laughs]", "[sighs]"}
+    assert {"محمد", "أحمد", "حمادة"} <= set(agent["asr"]["keywords"])
     assert "{{ack_hint}}" in agent["agent"]["prompt"]["prompt"]
     fillers = agent["turn"]["soft_timeout_config"]
     assert fillers["randomize_fillers"] and fillers["additional_soft_timeout_messages"]

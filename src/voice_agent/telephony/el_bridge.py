@@ -38,7 +38,7 @@ import httpx
 
 from voice_agent.agent_tools.activity import is_speech
 from voice_agent.logging_setup import get_logger
-from voice_agent.sarah import UNKNOWN_CALLER, opening_for, style_for_call
+from voice_agent.sarah import UNKNOWN_CALLER, caller_gender, opening_for, style_for_call
 
 log = get_logger(__name__)
 
@@ -385,6 +385,7 @@ class ElevenLabsBridge:
             "dynamic_variables": {
                 "caller_id": caller or UNKNOWN_CALLER,
                 "caller_name": person.name_ar if person else UNKNOWN_CALLER,
+                "caller_gender": caller_gender(person),
                 "opening": opening_for(person),
                 **style_for_call(),
             },

@@ -1,4 +1,4 @@
-# Fast AI assistant: ElevenLabs Agent on extension 778
+# Sarah: the ElevenLabs Agent on extensions 777 and 778
 
 ```
 Phone → Asterisk ext 778: Answer + AudioSocket ─TCP 127.0.0.1:9019─▶ el-bridge
@@ -49,8 +49,17 @@ The agent is **Sarah (سارة)**, the team's task-line assistant. Her identity 
   so calls don't all sound the same.
 - **Fillers:** randomized («لحظة…»، «ثواني بس…») while a task saves. A soft typing sound
   plays during the save.
-- **Voice:** a built-in voice on the free plan (`ELEVENLABS_AGENT_VOICE_ID`, default
-  "Sarah" `EXAVITQu4vr4xnSDxMaL`), at stability 0.4 and speed 1.05.
+- **Voice:** "Fatima – Expressive Egyptian Voice" (`I3u6waC588j43py1kDN2`, paid plan) on
+  `eleven_v3_conversational` with expressive mode. She may use the audio tags
+  [laughs] [chuckles] [sighs] [exhales] [excited], sparingly.
+- **Dialect:** Cairene Egyptian only. The prompt lists Egyptian words to use and Gulf or
+  formal words to avoid (زين، وش، أبغى، الحين، أبشر، حسنًا، سوف…).
+- **Grammar:** female forms for herself, and the caller's gender (`caller_gender`, from
+  `config/callers.json` + `people.json`) when speaking to them: male or unknown → «عامل
+  إيه؟»، female → «عاملة إيه؟».
+- **Personality:** punctuation for natural rhythm, Egyptian reactions («يا سلام!»،
+  «معلش»), a little chat and at most one light joke per call, never slowing a task.
+- **Recognition:** the team's names are sent to speech recognition as `asr.keywords`.
 - **Temperature:** 0.6 for variety; people and tool arguments are still fixed by enums.
 
 ## Who does what
@@ -115,6 +124,7 @@ The tool endpoints exist only when `AGENT_TOOL_SECRET` is set, and need `Authori
 
    ```bash
    sudo scripts/pbx-elevenlabs-route.sh apply     # … revert / verify
+   # AGENT_PBX_EXTENSIONS="777 778" in .env routes several extensions to Sarah
    ```
 
    It adds:

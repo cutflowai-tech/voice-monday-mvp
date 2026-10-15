@@ -35,6 +35,7 @@ from voice_agent.config import Settings
 from voice_agent.domain.people import PeopleDirectory, Person
 from voice_agent.sarah import (
     ACK_HINTS,
+    AUDIO_TAGS,
     DONE_HINTS,
     FILLERS,
     NAME_AR,
@@ -131,6 +132,31 @@ def build_tools(settings: Settings, people: list[Person], secret_id: str) -> dic
     return {TOOL_SUBMIT: submit, TOOL_CANCEL: cancel}
 
 
+def build_tts(settings: Settings) -> dict:
+    model = settings.elevenlabs_agent_tts_model
+    tts: dict[str, Any] = {
+        "model_id": model,
+        "voice_id": settings.elevenlabs_agent_voice_id,
+        "similarity_boost": 0.8,
+    }
+    if model.startswith("eleven_v3"):
+        # expressive mode: laughs, sighs and breaths through audio tags
+        tts["expressive_mode"] = True
+        tts["suggested_audio_tags"] = [{"tag": t, "description": d} for t, d in AUDIO_TAGS]
+        tts["stability"] = 0.5  # v3 "natural"
+    else:
+        tts["stability"] = 0.4  # more expressive, less monotone
+        tts["speed"] = 1.05
+    return tts
+
+
+def asr_keywords(people: list[Person]) -> list[str]:
+    words = {p.name_ar for p in people}
+    for p in people:
+        words.update(a for a in p.aliases if any("\u0600" <= ch <= "\u06ff" for ch in a))
+    return sorted(words | {"تاسك", "Monday", "مانداي"})
+
+
 def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -> dict:
     return {
         "name": f"{NAME_EN} ({NAME_AR}) - Waset Co task line",
@@ -145,6 +171,7 @@ def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -
                         "opening": OPENINGS_ANONYMOUS[0],
                         "caller_name": UNKNOWN_CALLER,
                         "caller_id": UNKNOWN_CALLER,
+                        "caller_gender": UNKNOWN_CALLER,
                         "ack_hint": ACK_HINTS[0],
                         "done_hint": DONE_HINTS[0],
                     }
@@ -157,13 +184,7 @@ def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -
                     "tool_ids": tool_ids,
                 },
             },
-            "tts": {
-                "model_id": settings.elevenlabs_agent_tts_model,
-                "voice_id": settings.elevenlabs_agent_voice_id,
-                "stability": 0.4,  # more expressive, less monotone
-                "similarity_boost": 0.8,
-                "speed": 1.05,
-            },
+            "tts": build_tts(settings),
             "turn": {
                 "turn_timeout": 7,
                 "turn_eagerness": "eager",
@@ -177,7 +198,12 @@ def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -
                     "use_llm_generated_message": False,
                 },
             },
-            "asr": {"provider": "scribe_realtime", "quality": "high"},
+            "asr": {
+                "provider": "scribe_realtime",
+                "quality": "high",
+                # bias recognition towards the team's names and the domain words
+                "keywords": asr_keywords(people),
+            },
         },
         # Only our bridge (with a signed URL from our API key) may start conversations.
         "platform_settings": {"auth": {"enable_auth": True}},
