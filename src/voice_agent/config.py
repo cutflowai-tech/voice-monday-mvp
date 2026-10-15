@@ -130,9 +130,9 @@ class Settings(BaseSettings):
     agent_public_url: str = ""  # https URL of the Cloudflare Tunnel (only /agent/tools/*)
     elevenlabs_agent_id: str = ""
     elevenlabs_phone_number_id: str = ""
-    elevenlabs_agent_voice_id: str = "I3u6waC588j43py1kDN2"  # Fatima, Egyptian (paid plan)
+    elevenlabs_agent_voice_id: str = "L10lEremDiJfPicq5CPh"  # Yasmine, Egyptian agent voice
     elevenlabs_agent_llm: str = "qwen3-30b-a3b"
-    elevenlabs_agent_tts_model: str = "eleven_v3_conversational"
+    elevenlabs_agent_tts_model: str = "eleven_v4_turbo"
     elevenlabs_tool_execution_mode: Literal["immediate", "post_tool_speech", "async"] = (
         "post_tool_speech"
     )

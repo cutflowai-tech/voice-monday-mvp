@@ -49,9 +49,12 @@ The agent is **Sarah (سارة)**, the team's task-line assistant. Her identity 
   so calls don't all sound the same.
 - **Fillers:** randomized («لحظة…»، «ثواني بس…») while a task saves. A soft typing sound
   plays during the save.
-- **Voice:** "Fatima – Expressive Egyptian Voice" (`I3u6waC588j43py1kDN2`, paid plan) on
-  `eleven_v3_conversational` with expressive mode. She may use the audio tags
-  [laughs] [chuckles] [sighs] [exhales] [excited], sparingly.
+- **Voice:** "Yasmine – Human-Like Banking Agent" (`L10lEremDiJfPicq5CPh`), an Egyptian
+  library voice built for phone agents, on `eleven_v4_turbo`. Chosen 2026-10-15 after
+  Fatima on `eleven_v3_conversational` sounded Saudi or formal on calls; the expressive v3
+  model doesn't keep a professional voice's accent. On a non-v3 model the prompt asks for
+  feelings in words and no `[tags]`; set `ELEVENLABS_AGENT_TTS_MODEL=eleven_v3_conversational`
+  to get laughs and sighs back (with the accent trade-off).
 - **Dialect:** Cairene Egyptian only. The prompt lists Egyptian words to use and Gulf or
   formal words to avoid (زين، وش، أبغى، الحين، أبشر، حسنًا، سوف…).
 - **Grammar:** female forms for herself, and the caller's gender (`caller_gender`, from

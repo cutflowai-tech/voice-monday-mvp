@@ -140,3 +140,14 @@ def test_missing_settings_are_listed():
     problems = missing_settings(Settings(agent_public_url="http://insecure"))
     assert "AGENT_TOOL_SECRET is required" in problems
     assert "AGENT_PUBLIC_URL must start with https://" in problems
+
+
+def test_prompt_matches_the_voice_model():
+    from voice_agent.sarah import build_prompt
+
+    people = list(PeopleDirectory.load())[:2]
+    expressive = build_prompt(people, expressive=True)
+    plain = build_prompt(people, expressive=False)
+    assert "[laughs]" in expressive and "[happy]" in expressive
+    assert "[" not in plain  # no tag examples at all on a non-expressive model
+    assert "Never write anything in square brackets" in plain

@@ -178,7 +178,10 @@ def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -
                     }
                 },
                 "prompt": {
-                    "prompt": build_prompt(people),
+                    "prompt": build_prompt(
+                        people,
+                        expressive=settings.elevenlabs_agent_tts_model.startswith("eleven_v3"),
+                    ),
                     "llm": settings.elevenlabs_agent_llm,
                     # variety in wording; people and tool arguments stay constrained by enums
                     "temperature": 0.6,

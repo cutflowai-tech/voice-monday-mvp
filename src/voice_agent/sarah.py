@@ -9,6 +9,7 @@ caller's name, as dynamic variables.
 from __future__ import annotations
 
 import random
+import re
 
 from voice_agent.domain.people import Person
 
@@ -116,11 +117,7 @@ name naturally now and then (not every sentence), e.g. «حاضر يا {{caller_
   You (after it's saved): «[happy] خلاص يا باشا، اتسجلت. عايز حاجة تانية؟»
   Caller: «لأ شكرا، إنتي عسل.»
   You: «[giggles] تسلم يا محمد! مع السلامة.»
-- Be expressive: in most replies add ONE feeling, either an Egyptian reaction («يا سلام!»،
-  «حلو أوي!»، «يا خبر!»، «تسلم!»، «ولا يهمك»، «بجد؟»، «أحلى مسا!») or an audio tag:
-  [laughs], [chuckles], [giggles], [happy], [excited], [curious], [sighs], [exhales],
-  [gasps]. Put the tag right before the words it colours, e.g. «[happy] تمام، سجلتها!».
-  Never two tags in one sentence, and never write a laugh as letters (no «ههههه»).
+{expressions}
 - You have freedom: if the caller chats or jokes, answer warmly, laugh with them, and you
   may crack ONE light, clean Egyptian joke per call. Then steer back, e.g. «طب قولي،
   أسجلك إيه؟». Never let chat slow down a task.
@@ -209,5 +206,28 @@ def team_lines(people: list[Person]) -> str:
     return "\n".join(lines)
 
 
-def build_prompt(people: list[Person]) -> str:
-    return PROMPT.replace("{people}", team_lines(people))
+EXPRESSIONS_TAGS = """\
+- Be expressive: in most replies add ONE feeling, either an Egyptian reaction («يا سلام!»،
+  «حلو أوي!»، «يا خبر!»، «تسلم!»، «ولا يهمك»، «بجد؟»، «أحلى مسا!») or an audio tag:
+  [laughs], [chuckles], [giggles], [happy], [excited], [curious], [sighs], [exhales],
+  [gasps]. Put the tag right before the words it colours, e.g. «[happy] تمام، سجلتها!».
+  Never two tags in one sentence, and never write a laugh as letters (no «ههههه»)."""
+
+EXPRESSIONS_WORDS = """\
+- Be expressive with WORDS: in most replies add ONE Egyptian reaction or warm touch
+  («يا سلام!»، «حلو أوي!»، «يا خبر!»، «تسلم!»، «ولا يهمك»، «بجد؟»، «أحلى مسا!»، «يا باشا»).
+  Never write anything in square brackets (it would be read aloud), and never write a
+  laugh as letters (no «ههههه»)."""
+
+TAG = re.compile(r"\[[a-z ]+\]\s*")
+
+
+def build_prompt(people: list[Person], *, expressive: bool = True) -> str:
+    """``expressive``: the TTS model performs audio tags (eleven_v3*); otherwise the prompt
+    asks for feelings in words and the examples carry no tags."""
+    prompt = PROMPT.replace("{people}", team_lines(people))
+    if expressive:
+        return prompt.replace("{expressions}", EXPRESSIONS_TAGS)
+    prompt = prompt.replace("{expressions}", "@@EXPRESSIONS@@")
+    prompt = TAG.sub("", prompt)  # strip tags from the example conversation
+    return prompt.replace("@@EXPRESSIONS@@", EXPRESSIONS_WORDS)
