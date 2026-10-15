@@ -74,6 +74,12 @@ SIGNED_URL_MAX_AGE_S = 60.0
 OUTBOUND_CONTEXT = "voice-monday-el-outbound"  # dialplan: AudioSocket(${VM_UUID},...)
 OUTBOUND_RING_SECONDS = 25
 OUTBOUND_MAX_CALL_SECONDS = 90
+# Prank punchline, triggered by the bridge itself (the agent's turn-taking ignores a short
+# «إيه» said over her line as a backchannel, so waiting for the model left callers hanging).
+PRANK_COUNT_AFTER_S = 1.5  # caller speech counts once she has talked this long («ألو» on
+#                            pickup doesn't trigger the punchline)
+PRANK_MIN_SPEECH_S = 0.15  # any short reply: «إيه»، «نعم»، «خير؟»
+PRANK_PAUSE_S = 0.5  # ... followed by this much quiet
 # Keyboard typing played while a task is being saved (louder than ElevenLabs' own
 # tool sound, which has no volume setting). Ducked under Sarah's voice when she talks.
 TYPING_TARGET_RMS = 2200  # at volume 1.0; phone speech is roughly 3000-5000
@@ -184,6 +190,11 @@ class BridgeCall:
         self.punchline_for = punchline_for  # (uuid bytes) -> 16 kHz PCM clip, or None
         self.punchline: bytes | None = None
         self.muted = False  # after the punchline starts, the agent's own audio is dropped
+        self.punchline_started = False
+        self._finished = asyncio.Event()  # set when the call should end (punchline done)
+        self._agent_spoke_at: float | None = None
+        self._caller_speech_s = 0.0
+        self._last_caller_speech: float | None = None
         self.call_uuid: bytes | None = None
         self.is_saving = is_saving  # async (conversation_id) -> bool, from the task window
         self.typing_volume = typing_volume
@@ -239,6 +250,9 @@ class BridgeCall:
             ]
             if self.is_saving and self.typing_volume > 0:
                 tasks.append(asyncio.create_task(self._watch_saving()))
+            if self.punchline:
+                tasks.append(asyncio.create_task(self._auto_punchline()))
+                tasks.append(asyncio.create_task(self._finished.wait()))
             done, pending = await asyncio.wait(
                 tasks, timeout=limit, return_when=asyncio.FIRST_COMPLETED
             )
@@ -291,7 +305,10 @@ class BridgeCall:
             kind, payload = await read_message(self.reader)
             if kind in AUDIO_RATES:
                 self.asterisk_kind = kind
-                if self.on_speech and self.conversation_id and is_speech(payload):
+                speaking = is_speech(payload)
+                if speaking:
+                    self._count_caller_speech(len(payload) / (2 * AUDIO_RATES[kind]))
+                if self.on_speech and self.conversation_id and speaking:
                     mark = asyncio.create_task(self.on_speech(self.conversation_id))
                     self._background.add(mark)
                     mark.add_done_callback(self._background.discard)
@@ -312,6 +329,8 @@ class BridgeCall:
             if kind == "audio":
                 if self.muted:
                     continue
+                if self._agent_spoke_at is None:
+                    self._agent_spoke_at = time.monotonic()
                 pcm = base64.b64decode(message["audio_event"]["audio_base_64"])
                 if self._user_spoke_at is not None:
                     log.info(
@@ -372,20 +391,51 @@ class BridgeCall:
                 delay = 0
             await asyncio.sleep(max(0.0, delay))
 
+    def _count_caller_speech(self, seconds: float) -> None:
+        now = time.monotonic()
+        if self._agent_spoke_at is not None and now - self._agent_spoke_at >= PRANK_COUNT_AFTER_S:
+            self._caller_speech_s += seconds
+            self._last_caller_speech = now
+
+    async def _auto_punchline(self) -> None:
+        """Prank calls: once her opening has finished and the person has said anything,
+        play the punchline as soon as they pause, without waiting for the model."""
+        while not self.punchline_started:
+            now = time.monotonic()
+            opening_done = (
+                self._agent_spoke_at is not None
+                and now - self._agent_spoke_at > 1.0
+                and not self.out_buffer
+            )
+            if (
+                opening_done
+                and self._caller_speech_s >= PRANK_MIN_SPEECH_S
+                and self._last_caller_speech is not None
+                and now - self._last_caller_speech >= PRANK_PAUSE_S
+            ):
+                log.info("el_bridge.punchline_auto", conversation_id=self.conversation_id)
+                await self._play_punchline()
+                return
+            await asyncio.sleep(0.05)
+        # started by the agent's tool instead: this task must not end the call early
+        await self._finished.wait()
+
+    async def _play_punchline(self) -> None:
+        if self.punchline_started or not self.punchline:
+            return
+        self.punchline_started = True
+        self.muted = True
+        clip = resample(self.punchline, 16000, self.asterisk_rate)
+        self.out_buffer[:] = clip
+        log.info("el_bridge.punchline", conversation_id=self.conversation_id)
+        await asyncio.sleep(len(clip) / (2 * self.asterisk_rate) + 0.4)  # let the laugh finish
+        self._finished.set()
+
     async def _client_tool(self, ws, call: dict[str, Any]) -> bool:
         """Client tools run here, in the bridge. Returns True when the call should end."""
         name = call.get("tool_name")
-        played = False
-        clip_seconds = 0.0
-        if name == "prank_reveal" and self.punchline:
-            self.muted = True
-            clip = resample(self.punchline, 16000, self.asterisk_rate)
-            self.out_buffer[:] = clip
-            clip_seconds = len(clip) / (2 * self.asterisk_rate)
-            played = True
-            result = "played"
-        elif name == "prank_reveal":
-            result = "unavailable"
+        if name == "prank_reveal":
+            result = "played" if self.punchline else "unavailable"
         else:
             result = f"unknown client tool {name!r}"
         if call.get("expects_response"):
@@ -400,10 +450,11 @@ class BridgeCall:
                         }
                     )
                 )
-        if not played:
+        if name != "prank_reveal" or not self.punchline:
             return False
-        log.info("el_bridge.punchline", conversation_id=self.conversation_id)
-        await asyncio.sleep(clip_seconds + 0.4)  # let the laughter finish before hanging up
+        if self.punchline_started:  # the bridge already played it
+            return False
+        await self._play_punchline()
         return True
 
     async def _watch_saving(self) -> None:

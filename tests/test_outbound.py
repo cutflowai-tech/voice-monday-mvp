@@ -170,7 +170,7 @@ async def test_prank_reveal_plays_the_clip_mutes_and_ends_the_call():
         ws, {"tool_name": "prank_reveal", "tool_call_id": "t1", "expects_response": True}
     )
     pacer.cancel()
-    assert ended and call.muted
+    assert ended and call.muted and call.punchline_started
     assert ws.sent == [
         {"type": "client_tool_result", "tool_call_id": "t1", "result": "played", "is_error": False}
     ]
@@ -234,3 +234,55 @@ async def test_name_override_addresses_whoever_sits_at_the_extension(people):
     assert variables["caller_name"] == "منصور"
     assert variables["opening"] == "ألو يا منصور، عايزاك في حاجة مهمة."
     assert OutboundRequest.from_json(request.to_json()).name_override == "منصور"
+
+
+async def test_bridge_plays_the_punchline_itself_after_any_short_reply():
+    import asyncio
+
+    from voice_agent.telephony.el_bridge import BridgeCall
+
+    from .test_el_bridge import FakeWriter
+
+    call = BridgeCall(asyncio.StreamReader(), FakeWriter(), open_agent=None)
+    call.punchline = bytes(640)
+    call.connecting = False
+    now = time.monotonic()
+    call._agent_spoke_at = now - 3  # her opening is over
+    call._count_caller_speech(0.3)  # «إيه»
+    call._last_caller_speech = now - 0.6  # ... then a pause
+    await asyncio.wait_for(call._auto_punchline(), 2)
+    assert call.punchline_started and call.muted and call._finished.is_set()
+
+
+async def test_hello_on_pickup_does_not_trigger_the_punchline():
+    import asyncio
+
+    from voice_agent.telephony.el_bridge import BridgeCall
+
+    from .test_el_bridge import FakeWriter
+
+    call = BridgeCall(asyncio.StreamReader(), FakeWriter(), open_agent=None)
+    call.punchline = bytes(640)
+    call._count_caller_speech(0.5)  # «ألو؟» before she has said anything
+    call._agent_spoke_at = time.monotonic()
+    call._count_caller_speech(0.5)  # still within her first 1.5 s
+    assert call._caller_speech_s == 0
+
+
+async def test_auto_watcher_does_not_cut_a_punchline_started_by_the_tool():
+    import asyncio
+
+    from voice_agent.telephony.el_bridge import BridgeCall
+
+    from .test_el_bridge import FakeWriter
+
+    call = BridgeCall(asyncio.StreamReader(), FakeWriter(), open_agent=None)
+    call.punchline = bytes(16000)  # 0.5 s at 16 kHz
+    watcher = asyncio.create_task(call._auto_punchline())
+    tool = asyncio.create_task(
+        call._client_tool(Socket(), {"tool_name": "prank_reveal", "tool_call_id": "t"})
+    )
+    await asyncio.sleep(0.2)
+    assert not watcher.done()  # still waiting for the clip, not ending the call
+    assert await tool is True
+    await asyncio.wait_for(watcher, 1)
