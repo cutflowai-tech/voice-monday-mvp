@@ -92,10 +92,16 @@ async def test_first_sync_creates_everything_with_documented_shapes(el_settings,
         "caller_name",
         "caller_id",
         "caller_gender",
+        "call_mode",
+        "prank_by",
         "ack_hint",
         "done_hint",
     }
+    assert agent["agent"]["prompt"]["built_in_tools"]["end_call"]["params"] == {
+        "system_tool_type": "end_call"
+    }
     prompt_text = agent["agent"]["prompt"]["prompt"]
+    assert "{{call_mode}}" in prompt_text and "خدتك عليه" in prompt_text
     assert "{{caller_gender}}" in prompt_text and "أبغى" in prompt_text  # Gulf words banned
     # default: Egyptian voice on the fast model -> no audio tags anywhere
     assert agent["tts"]["model_id"] == "eleven_v4_turbo"
@@ -161,3 +167,17 @@ def test_expressive_model_gets_audio_tags(el_settings):
     tts = build_tts(el_settings)
     assert tts["expressive_mode"] is True
     assert {t["tag"] for t in tts["suggested_audio_tags"]} >= {"[laughs]", "[sighs]"}
+
+
+def test_call_person_tool_only_when_outbound_is_on(el_settings):
+    from voice_agent.elevenlabs_agent import build_tools
+
+    people = list(PeopleDirectory.load())
+    assert "call_person" not in build_tools(el_settings, people[:2], "sec")
+    tools = build_tools(el_settings, people[:2], "sec", callable_people=people[:3])
+    schema = tools["call_person"]["api_schema"]
+    assert schema["url"].endswith("/agent/tools/call_person")
+    assert schema["request_body_schema"]["properties"]["person_key"]["enum"] == [
+        p.key for p in people[:3]
+    ]
+    assert schema["request_body_schema"]["properties"]["purpose"]["enum"] == ["prank"]

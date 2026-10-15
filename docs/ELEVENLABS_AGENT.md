@@ -74,6 +74,27 @@ The agent is **Sarah (سارة)**, the team's task-line assistant. Her identity 
   `EL_BRIDGE_TYPING_VOLUME` (0 = off, 1 = normal, up to 3).
 - **Temperature:** 0.6 for variety; people and tool arguments are still fixed by enums.
 
+## Sarah calls people (prank mode)
+
+On a normal call you can ask «اتصلي بأحمد واعملي فيه مقلب». What happens:
+
+1. Sarah calls the `call_person` tool. The API (`agent_tools/outbound.py`) only accepts team
+   members with an extension in `config/callers.json`, so outside numbers are impossible.
+   It rate-limits (each person at most once per 5 minutes, each requester 3 per 10
+   minutes) and queues the request in Redis.
+2. The bridge's dialer rings `PJSIP/<extension>` through ARI on 127.0.0.1, showing caller ID
+   `AGENT_OUTBOUND_CALLER_ID` ("Sarah <777>").
+3. When it's answered, the dialplan connects the call to the bridge, which starts Sarah in
+   **prank mode**: «ألو يا أحمد، عايزاك في حاجة مهمة.». When the person asks
+   «عايزاني في إيه؟», she says «خدتك عليه!» and «ده مقلب من <requester>», says goodbye and
+   hangs up with the `end_call` tool. If the person sounds busy or upset, she reveals the
+   joke straight away. A prank call lasts at most 90 s.
+
+Turn it on with `AGENT_OUTBOUND_ENABLED=true`. Then re-run `scripts/pbx-elevenlabs-route.sh
+apply`, which enables HTTP on loopback, adds the ARI user from `ASTERISK_ARI_USERNAME` /
+`ASTERISK_ARI_PASSWORD` and the `[voice-monday-el-outbound]` context. Also restart
+`el-bridge` and run `el-agent sync`. Set it to `false` and re-apply to turn it off again.
+
 ## Who does what
 
 **ElevenLabs** handles:

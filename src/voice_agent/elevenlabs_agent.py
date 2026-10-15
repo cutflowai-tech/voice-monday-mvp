@@ -48,6 +48,7 @@ from voice_agent.sarah import (
 SECRET_NAME = "voice-monday-tool-bearer"  # noqa: S105 (a name, not a value)
 TOOL_SUBMIT = "submit_task"
 TOOL_CANCEL = "cancel_last"
+TOOL_CALL = "call_person"
 
 
 def assignable_people(settings: Settings, directory: PeopleDirectory) -> list[Person]:
@@ -56,7 +57,12 @@ def assignable_people(settings: Settings, directory: PeopleDirectory) -> list[Pe
     return [p for p in directory if p.key in ids]
 
 
-def build_tools(settings: Settings, people: list[Person], secret_id: str) -> dict[str, dict]:
+def build_tools(
+    settings: Settings,
+    people: list[Person],
+    secret_id: str,
+    callable_people: list[Person] | None = None,
+) -> dict[str, dict]:
     base = settings.agent_public_url.rstrip("/")
     headers = {"Authorization": {"secret_id": secret_id}}
     conversation = {"type": "string", "dynamic_variable": "system__conversation_id"}
@@ -130,7 +136,46 @@ def build_tools(settings: Settings, people: list[Person], secret_id: str) -> dic
             },
         },
     }
-    return {TOOL_SUBMIT: submit, TOOL_CANCEL: cancel}
+    tools = {TOOL_SUBMIT: submit, TOOL_CANCEL: cancel}
+    if callable_people:
+        tools[TOOL_CALL] = {
+            "type": "webhook",
+            "name": TOOL_CALL,
+            "description": (
+                "Phone a team member's extension to play a friendly prank, when the caller "
+                "asks you to («اتصلي بأحمد واعملي فيه مقلب»). Returns at once; the call "
+                "happens in the background."
+            ),
+            "response_timeout_secs": 5,
+            "pre_tool_speech": "auto",
+            "execution_mode": "immediate",
+            "interruption_mode": "allow",
+            "api_schema": {
+                "url": f"{base}/agent/tools/{TOOL_CALL}",
+                "method": "POST",
+                "content_type": "application/json",
+                "request_headers": headers,
+                "request_body_schema": {
+                    "type": "object",
+                    "required": ["conversation_id", "person_key", "purpose"],
+                    "properties": {
+                        "conversation_id": conversation,
+                        "caller_id": {"type": "string", "dynamic_variable": "caller_id"},
+                        "person_key": {
+                            "type": "string",
+                            "enum": [p.key for p in callable_people],
+                            "description": "Key of the team member to call.",
+                        },
+                        "purpose": {
+                            "type": "string",
+                            "enum": ["prank"],
+                            "description": "Why you're calling.",
+                        },
+                    },
+                },
+            },
+        }
+    return tools
 
 
 def build_tts(settings: Settings) -> dict:
@@ -173,6 +218,8 @@ def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -
                         "caller_name": UNKNOWN_CALLER,
                         "caller_id": UNKNOWN_CALLER,
                         "caller_gender": UNKNOWN_CALLER,
+                        "call_mode": "inbound",
+                        "prank_by": UNKNOWN_CALLER,
                         "ack_hint": ACK_HINTS[0],
                         "done_hint": DONE_HINTS[0],
                     }
@@ -186,6 +233,15 @@ def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -
                     # variety in wording; people and tool arguments stay constrained by enums
                     "temperature": 0.6,
                     "tool_ids": tool_ids,
+                    # lets her hang up after a goodbye or a prank's punchline
+                    "built_in_tools": {
+                        "end_call": {
+                            "type": "system",
+                            "name": "end_call",
+                            "description": "",
+                            "params": {"system_tool_type": "end_call"},
+                        }
+                    },
                 },
             },
             "tts": build_tts(settings),
@@ -271,6 +327,15 @@ class ElevenLabsAgentSync:
             raise RuntimeError(f"{method} {path} -> HTTP {response.status_code}: {response.text}")
         return response.json() if response.content else {}
 
+    def callable_people(self, directory: PeopleDirectory) -> list[Person]:
+        """Team members Sarah may phone: outbound enabled and an extension on file."""
+        if not self.s.agent_outbound_enabled or not self.s.caller_directory_file:
+            return []
+        from voice_agent.domain.callers import CallerDirectory
+
+        callers = CallerDirectory.load(self.s.caller_directory_file, {p.key for p in directory})
+        return [p for p in directory if callers.extension_for(p.key)]
+
     async def run(self, directory: PeopleDirectory, *, rotate_secret: bool = False) -> dict:
         state = self._load()
         people = assignable_people(self.s, directory)
@@ -286,7 +351,9 @@ class ElevenLabsAgentSync:
             state["secret_id"] = secret["secret_id"]
             self._save(state)
 
-        tools = build_tools(self.s, people, state["secret_id"])
+        tools = build_tools(
+            self.s, people, state["secret_id"], callable_people=self.callable_people(directory)
+        )
         tool_ids = state.setdefault("tool_ids", {})
         for name, config in tools.items():
             if tool_ids.get(name):

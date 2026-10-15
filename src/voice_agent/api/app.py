@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from voice_agent.agent_tools.activity import SpeechActivity
+from voice_agent.agent_tools.outbound import OutboundCalls
 from voice_agent.agent_tools.router import router as agent_tools_router
 from voice_agent.agent_tools.window import TaskWindow
 from voice_agent.config import Role, Settings, load_settings
@@ -100,10 +101,23 @@ def create_app(settings: Settings | None = None, container: Container | None = N
             if s.agent_tool_secret
             else None
         )
+        app.state.outbound = (
+            OutboundCalls(
+                container.queue.redis,
+                people=container.directory,
+                callers=container.callers,
+                namespace=s.queue_name,
+            )
+            if s.agent_tool_secret
+            and s.agent_outbound_enabled
+            and isinstance(container.queue, RedisJobQueue)
+            else None
+        )
         log.info(
             "api.started",
             monday_mode=s.monday_mode,
             agent_tools=app.state.task_window is not None,
+            outbound_calls=app.state.outbound is not None,
         )
         try:
             yield

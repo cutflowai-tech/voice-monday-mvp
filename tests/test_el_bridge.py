@@ -117,7 +117,7 @@ async def test_call_streams_audio_both_ways_and_hangs_up_cleanly():
     ws = FakeAgentSocket()
     opened_for = []
 
-    async def open_agent(caller):
+    async def open_agent(caller, *_):
         opened_for.append(caller)
         return ws
 
@@ -146,7 +146,7 @@ async def test_ringback_is_streamed_while_the_agent_connects():
     reader.feed_data(frame(KIND_UUID, uuid.uuid4().bytes))
     writer = FakeWriter()
 
-    async def slow_agent(caller):
+    async def slow_agent(caller, *_):
         await asyncio.sleep(0.3)
         raise ConnectionError("agent unavailable")
 

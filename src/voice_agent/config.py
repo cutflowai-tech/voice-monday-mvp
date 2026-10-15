@@ -128,6 +128,9 @@ class Settings(BaseSettings):
     agent_speech_tail_seconds: float = Field(default=1.5, ge=0, le=5)
     agent_max_hold_seconds: float = Field(default=6.0, ge=0, le=20)
     agent_public_url: str = ""  # https URL of the Cloudflare Tunnel (only /agent/tools/*)
+    # Sarah may call team extensions (e.g. pranks); needs ARI and the PBX outbound context
+    agent_outbound_enabled: bool = False
+    agent_outbound_caller_id: str = "Sarah <777>"
     elevenlabs_agent_id: str = ""
     elevenlabs_phone_number_id: str = ""
     elevenlabs_agent_voice_id: str = "L10lEremDiJfPicq5CPh"  # Yasmine, Egyptian agent voice

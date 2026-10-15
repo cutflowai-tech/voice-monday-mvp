@@ -38,7 +38,13 @@ import httpx
 
 from voice_agent.agent_tools.activity import is_speech
 from voice_agent.logging_setup import get_logger
-from voice_agent.sarah import UNKNOWN_CALLER, caller_gender, opening_for, style_for_call
+from voice_agent.sarah import (
+    UNKNOWN_CALLER,
+    caller_gender,
+    opening_for,
+    prank_opening,
+    style_for_call,
+)
 
 log = get_logger(__name__)
 
@@ -65,6 +71,9 @@ RINGBACK_ON_S = 2.0
 RINGBACK_PERIOD_S = 3.0
 RINGBACK_AMPLITUDE = 4000
 SIGNED_URL_MAX_AGE_S = 60.0
+OUTBOUND_CONTEXT = "voice-monday-el-outbound"  # dialplan: AudioSocket(${VM_UUID},...)
+OUTBOUND_RING_SECONDS = 25
+OUTBOUND_MAX_CALL_SECONDS = 90
 # Keyboard typing played while a task is being saved (louder than ElevenLabs' own
 # tool sound, which has no volume setting). Ducked under Sarah's voice when she talks.
 TYPING_TARGET_RMS = 2200  # at volume 1.0; phone speech is roughly 3000-5000
@@ -168,7 +177,10 @@ class BridgeCall:
         on_speech=None,
         is_saving=None,
         typing_volume: float = 1.0,
+        limit_for=None,
     ):
+        self.limit_for = limit_for  # (uuid bytes) -> max seconds for this call, or None
+        self.call_uuid: bytes | None = None
         self.is_saving = is_saving  # async (conversation_id) -> bool, from the task window
         self.typing_volume = typing_volume
         self.saving = False
@@ -198,12 +210,14 @@ class BridgeCall:
         kind, payload = await asyncio.wait_for(read_message(self.reader), 5)
         if kind != KIND_UUID or len(payload) != 16:
             raise ValueError(f"expected UUID first, got type {kind:#x}")
+        self.call_uuid = payload
         self.caller = caller_from_uuid(payload)
+        limit = self.limit_for(payload) if self.limit_for else None
         # AudioSocket hangs up after 2 s without data from us: stream (silence) from now on.
         pacer = asyncio.create_task(self._pace_playback())
         ws = None
         try:
-            ws = await self.open_agent(self.caller)
+            ws = await self.open_agent(self.caller, payload)
             await self._await_metadata(ws)
             self.connecting = False
             log.info(
@@ -219,7 +233,11 @@ class BridgeCall:
             ]
             if self.is_saving and self.typing_volume > 0:
                 tasks.append(asyncio.create_task(self._watch_saving()))
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            done, pending = await asyncio.wait(
+                tasks, timeout=limit, return_when=asyncio.FIRST_COMPLETED
+            )
+            if not done:
+                log.info("el_bridge.call_limit_reached", seconds=limit)
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
@@ -373,8 +391,17 @@ class ElevenLabsBridge:
         activity=None,
         identify=None,
         typing_volume: float = 1.0,
+        outbound=None,
+        ari=None,
+        people=None,
+        outbound_caller_id: str = "Sarah <777>",
     ):
         self.typing_volume = typing_volume
+        self.outbound = outbound  # OutboundCalls: queued call requests from the API
+        self.ari = ari  # AriClient on loopback, used to place those calls
+        self.people = people
+        self.outbound_caller_id = outbound_caller_id
+        self.pending_outbound: dict[bytes, tuple[float, Any]] = {}
         self.activity = activity  # SpeechActivity: lets the task window wait for the caller
         self.identify = identify  # (caller number) -> Person | None, for Sarah's greeting
         self.api_key = api_key
@@ -424,7 +451,7 @@ class ElevenLabsBridge:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), 10)
 
-    async def open_agent(self, caller: str | None):
+    async def open_agent(self, caller: str | None, call_uuid: bytes | None = None):
         from websockets.asyncio.client import connect
 
         t0 = time.monotonic()
@@ -436,22 +463,78 @@ class ElevenLabsBridge:
             signed_url_ms=round((t1 - t0) * 1000),
             connect_ms=round((time.monotonic() - t1) * 1000),
         )
-        await ws.send(json.dumps(self.initiation(caller)))
+        await ws.send(json.dumps(self.initiation(caller, call_uuid)))
         return ws
 
-    def initiation(self, caller: str | None) -> dict[str, Any]:
-        """Who is calling, and a fresh greeting from Sarah for this call."""
+    def initiation(self, caller: str | None, call_uuid: bytes | None = None) -> dict[str, Any]:
+        """Who Sarah is talking to and why, plus a fresh greeting for this call."""
+        outbound = self.pending_outbound.pop(call_uuid, None) if call_uuid else None
+        if outbound is not None and self.people is not None:
+            request = outbound[1]
+            target = self.people.get(request.target_key)
+            requester = self.people.get(request.requested_by) if request.requested_by else None
+            if target is not None:
+                log.info("el_bridge.outbound_answered", target=target.key, purpose=request.purpose)
+                return {
+                    "type": "conversation_initiation_client_data",
+                    "dynamic_variables": {
+                        "call_mode": request.purpose,
+                        "caller_id": request.extension,
+                        "caller_name": target.name_ar,
+                        "caller_gender": caller_gender(target),
+                        "prank_by": requester.name_ar if requester else "حد من الفريق",
+                        "opening": prank_opening(target),
+                        **style_for_call(),
+                    },
+                }
         person = self.identify(caller) if (self.identify and caller) else None
         return {
             "type": "conversation_initiation_client_data",
             "dynamic_variables": {
+                "call_mode": "inbound",
                 "caller_id": caller or UNKNOWN_CALLER,
                 "caller_name": person.name_ar if person else UNKNOWN_CALLER,
                 "caller_gender": caller_gender(person),
+                "prank_by": UNKNOWN_CALLER,
                 "opening": opening_for(person),
                 **style_for_call(),
             },
         }
+
+    def limit_for(self, call_uuid: bytes) -> float | None:
+        return OUTBOUND_MAX_CALL_SECONDS if call_uuid in self.pending_outbound else None
+
+    async def place_call(self, request) -> None:
+        """Ring the extension; when answered the dialplan opens an AudioSocket to us with
+        this UUID, and ``initiation`` recognises it as an outbound call."""
+        call_uuid = uuid.uuid4()
+        now = time.monotonic()
+        self.pending_outbound = {k: v for k, v in self.pending_outbound.items() if now - v[0] < 120}
+        self.pending_outbound[call_uuid.bytes] = (now, request)
+        try:
+            await self.ari.originate(
+                endpoint=f"PJSIP/{request.extension}",
+                context=OUTBOUND_CONTEXT,
+                extension="s",
+                caller_id=self.outbound_caller_id,
+                timeout_seconds=OUTBOUND_RING_SECONDS,
+                variables={"VM_UUID": str(call_uuid)},
+            )
+            log.info("el_bridge.outbound_ringing", target=request.target_key)
+        except Exception as exc:
+            self.pending_outbound.pop(call_uuid.bytes, None)
+            log.warning("el_bridge.outbound_failed", target=request.target_key, error=repr(exc))
+
+    async def dial_loop(self, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            try:
+                request = await self.outbound.next_request(wait_seconds=2)
+            except Exception as exc:
+                log.warning("el_bridge.outbound_queue_error", error=repr(exc))
+                await asyncio.sleep(2)
+                continue
+            if request is not None:
+                await self.place_call(request)
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()
@@ -462,6 +545,7 @@ class ElevenLabsBridge:
                 reader,
                 writer,
                 open_agent=self.open_agent,
+                limit_for=self.limit_for,
                 on_speech=self.activity.mark if self.activity else None,
                 is_saving=self.activity.is_saving if self.activity else None,
                 typing_volume=self.typing_volume,
@@ -479,11 +563,15 @@ class ElevenLabsBridge:
     async def serve(self, stop: asyncio.Event) -> None:
         server = await asyncio.start_server(self.handle, self.host, self.port)
         log.info("el_bridge.listening", host=self.host, port=self.port, agent_id=self.agent_id)
-        warm = asyncio.create_task(self.keep_warm(stop))
+        background = [asyncio.create_task(self.keep_warm(stop))]
+        if self.outbound is not None and self.ari is not None:
+            background.append(asyncio.create_task(self.dial_loop(stop)))
+            log.info("el_bridge.outbound_enabled")
         async with server:
             await stop.wait()
         if self.calls:
             await asyncio.wait(self.calls, timeout=10)
-        warm.cancel()
-        await asyncio.gather(warm, return_exceptions=True)
+        for task in background:
+            task.cancel()
+        await asyncio.gather(*background, return_exceptions=True)
         await self._client.aclose()

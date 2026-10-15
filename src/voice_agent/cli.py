@@ -328,7 +328,29 @@ def cmd_el_bridge(args: argparse.Namespace, settings: Settings) -> int:
             return people.get(key) if key else None
 
         redis = aioredis.from_url(settings.redis_url, socket_timeout=0.5)
+        outbound = ari = None
+        if settings.agent_outbound_enabled:
+            from voice_agent.agent_tools.outbound import OutboundCalls
+            from voice_agent.telephony.ari_client import AriClient
+
+            # BRPOP blocks: its own connection without the short socket timeout
+            outbound = OutboundCalls(
+                aioredis.from_url(settings.redis_url),
+                people=people,
+                callers=callers,
+                namespace=settings.queue_name,
+            )
+            ari = AriClient(
+                base_url=settings.asterisk_ari_url,
+                username=settings.asterisk_ari_username,
+                password=settings.asterisk_ari_password,
+                app=settings.asterisk_stasis_app,
+            )
         bridge = ElevenLabsBridge(
+            outbound=outbound,
+            ari=ari,
+            people=people,
+            outbound_caller_id=settings.agent_outbound_caller_id,
             identify=identify,
             typing_volume=settings.el_bridge_typing_volume,
             api_key=settings.elevenlabs_api_key,

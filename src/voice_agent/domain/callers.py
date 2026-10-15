@@ -39,3 +39,8 @@ class CallerDirectory:
 
     def lookup(self, number: str) -> str | None:
         return self._mappings.get(normalize_caller(number))
+
+    def extension_for(self, key: str) -> str | None:
+        """The person's internal extension (shortest mapped number, at most 6 digits)."""
+        numbers = [n for n, k in self._mappings.items() if k == key and len(n) <= 6]
+        return min(numbers, key=len) if numbers else None

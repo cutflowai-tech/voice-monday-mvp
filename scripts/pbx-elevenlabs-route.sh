@@ -22,6 +22,11 @@
 #   new  /etc/asterisk/pjsip_voice_monday_el.conf       TLS transport + "elevenlabs" trunk
 #   new  /etc/asterisk/keys/voice-monday-el.{crt,key}   self-signed cert for the TLS transport
 #   pjsip.conf       + `#include pjsip_voice_monday_el.conf`
+#   AGENT_OUTBOUND_ENABLED=true (audiosocket mode), so Sarah may phone team extensions:
+#   http.conf        uncomment enabled/bindport (only if bindaddr is 127.0.0.1); a marker
+#                    block records that this script did it, so revert turns it off again
+#   ari.conf         + ARI user ASTERISK_ARI_USERNAME/PASSWORD for the bridge's originate
+#   extensions       + [voice-monday-el-outbound]: answered call -> AudioSocket(${VM_UUID})
 # Each appended block sits between `; >>> voice-monday-el` and `; <<< voice-monday-el`.
 set -euo pipefail
 
@@ -51,6 +56,10 @@ SIP_NUMBER="$(env_get ELEVENLABS_SIP_NUMBER)"; SIP_NUMBER="${SIP_NUMBER:-778}"
 LAN_IP="$(env_get PBX_LAN_IP)"; LAN_IP="${LAN_IP:-192.168.0.118}"
 LOCAL_NET="$(env_get PBX_LOCAL_NET)"; LOCAL_NET="${LOCAL_NET:-192.168.0.0/24}"
 PUBLIC_IP="$(env_get PBX_PUBLIC_IP)"
+OUTBOUND="$(env_get AGENT_OUTBOUND_ENABLED)"; OUTBOUND="${OUTBOUND,,}"
+[[ "$OUTBOUND" == "1" ]] && OUTBOUND=true
+ARI_USER="$(env_get ASTERISK_ARI_USERNAME)"
+ARI_PASS="$(env_get ASTERISK_ARI_PASSWORD)"
 
 write_audiosocket() {
   # Every extension jumps to one shared route; the caller number rides in the last
@@ -75,7 +84,42 @@ exten => s,1,NoOp(voice-monday ElevenLabs agent call from \${CALLERID(num)})
  same => n(unavailable),NoOp(voice-monday agent unavailable for \${CALLERID(num)})
  same => n,Congestion(4)
 EOF
+    if [[ "$OUTBOUND" == "true" ]]; then
+      cat <<EOF
+
+; Sarah's outbound calls: the bridge originates via ARI with VM_UUID set
+[voice-monday-el-outbound]
+exten => s,1,NoOp(Sarah outbound call \${VM_UUID})
+ same => n,AudioSocket(\${VM_UUID},127.0.0.1:$BRIDGE_PORT)
+ same => n,Hangup()
+EOF
+    fi
   } >"$EXT_FILE"
+}
+
+enable_outbound() {
+  [[ -n "$ARI_USER" && -n "$ARI_PASS" && "$ARI_USER$ARI_PASS" =~ ^[A-Za-z0-9_.-]+$ ]] \
+    || { echo "set ASTERISK_ARI_USERNAME/PASSWORD (letters, digits, _ . -) in .env" >&2; exit 1; }
+  grep -qE '^bindaddr=127\.0\.0\.1$' "$ETC/http.conf" \
+    || { echo "http.conf bindaddr is not 127.0.0.1; refusing to enable HTTP" >&2; exit 1; }
+  if grep -q '^;enabled=yes$' "$ETC/http.conf"; then
+    sed -i -e 's/^;enabled=yes$/enabled=yes/' -e 's/^;bindport=8088$/bindport=8088/' "$ETC/http.conf"
+    end_nl "$ETC/http.conf"
+    printf '%s\n; HTTP enabled by this script for ARI on loopback\n%s\n' "$BEGIN" "$END" \
+      >>"$ETC/http.conf"
+  fi
+  drop_block "$ETC/ari.conf"
+  end_nl "$ETC/ari.conf"
+  printf '%s\n[%s]\ntype = user\nread_only = no\npassword = %s\npassword_format = plain\n%s\n' \
+    "$BEGIN" "$ARI_USER" "$ARI_PASS" "$END" >>"$ETC/ari.conf"
+}
+
+disable_outbound() {
+  drop_block "$ETC/ari.conf"
+  if grep -qF "$BEGIN" "$ETC/http.conf"; then  # only undo what this script enabled
+    sed -i -e 's/^enabled=yes$/;enabled=yes/' -e 's/^bindport=8088$/;bindport=8088/' "$ETC/http.conf"
+    drop_block "$ETC/http.conf"
+  fi
 }
 
 write_sip() {
@@ -197,23 +241,34 @@ apply() {
     printf '%s\n[%s](+)\ninclude => voice-monday-el\n#include extensions_voice_monday_el.conf\n%s\n' \
       "$BEGIN" "$CONTEXT" "$END" >>"$ETC/extensions.conf"
   fi
+  if [[ "$MODE" == "audiosocket" && "$OUTBOUND" == "true" ]]; then
+    enable_outbound
+  else
+    disable_outbound
+  fi
 
+  ast "module reload http"
+  ast "module reload res_ari.so"
   ast "module reload res_pjsip.so"
   ast "dialplan reload"
   verify
 }
 
 revert() {
+  disable_outbound
   drop_block "$ETC/pjsip.conf"
   drop_block "$ETC/extensions.conf"
   rm -f "$PJSIP_FILE" "$EXT_FILE" "$KEYS/voice-monday-el.crt" "$KEYS/voice-monday-el.key"
   ast "dialplan reload"
+  ast "module reload res_ari.so"
+  ast "module reload http"
   ast "module reload res_pjsip.so"
   verify
   echo "reverted (a TLS transport, if one was added, disappears after the next restart)"
 }
 
 verify() {
+  echo "--- ari users"; ast "ari show users" | tail -n +3 || true
   echo "--- endpoint";  ast "pjsip show endpoint elevenlabs" | grep -E "Endpoint:|Unable" || true
   for ext in $EXTS; do
     echo "--- dialplan $ext"; ast "dialplan show $ext@$CONTEXT" | grep -E "'$ext'|Goto|Dial|no existence" || true

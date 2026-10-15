@@ -65,10 +65,16 @@ class AriClient:
 
     # ------------------------------------------------------------------ REST
     async def _request(
-        self, method: str, path: str, *, params: dict | None = None, ok_404: bool = False
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json: dict | None = None,
+        ok_404: bool = False,
     ) -> httpx.Response:
         try:
-            response = await self._http.request(method, path, params=params)
+            response = await self._http.request(method, path, params=params, json=json)
         except httpx.HTTPError as exc:
             raise AriError(f"ARI {method} {path} failed: {exc!r}") from exc
         if response.status_code == 404 and ok_404:
@@ -79,6 +85,33 @@ class AriClient:
                 status=response.status_code,
             )
         return response
+
+    async def originate(
+        self,
+        *,
+        endpoint: str,
+        context: str,
+        extension: str = "s",
+        priority: int = 1,
+        caller_id: str | None = None,
+        timeout_seconds: int = 30,
+        variables: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """``POST /channels``: ring ``endpoint``; when answered it continues in the dialplan
+        at ``context``/``extension``/``priority`` (no Stasis app needed)."""
+        params: dict[str, Any] = {
+            "endpoint": endpoint,
+            "context": context,
+            "extension": extension,
+            "priority": priority,
+            "timeout": timeout_seconds,
+        }
+        if caller_id:
+            params["callerId"] = caller_id
+        response = await self._request(
+            "POST", "/channels", params=params, json={"variables": variables or {}}
+        )
+        return response.json() if response.content else {}
 
     async def answer(self, channel_id: str) -> None:
         await self._request("POST", f"/channels/{quote(channel_id)}/answer")
