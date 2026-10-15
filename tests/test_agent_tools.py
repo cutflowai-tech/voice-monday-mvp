@@ -196,3 +196,61 @@ def test_only_agent_tools_are_reachable_through_the_tunnel(client):
     body = {"conversation_id": "conv_t", "assignee_key": "ahmed", "task": "مهمة"}
     headers = {**via_tunnel, "Authorization": f"Bearer {SECRET}"}
     assert client.post("/agent/tools/submit_task", json=body, headers=headers).status_code == 200
+
+
+class FakeActivity:
+    """Caller 'spoke' until ``speaking_until`` (monotonic)."""
+
+    def __init__(self, speaking_for: float):
+        import time
+
+        self._time = time
+        self.until = time.monotonic() + speaking_for
+
+    async def seconds_since_speech(self, conversation_id):
+        now = self._time.monotonic()
+        return 0.0 if now < self.until else now - self.until
+
+
+async def test_window_stays_open_while_the_caller_is_still_correcting(container, worker):
+    activity = FakeActivity(speaking_for=0.4)  # still talking when the 0.1 s grace ends
+    window = TaskWindow(
+        container,
+        grace_seconds=0.1,
+        done_wait_seconds=1.0,
+        poll_seconds=0.01,
+        activity=activity,
+        speech_tail_seconds=0.2,
+        max_hold_seconds=3.0,
+    )
+    async with running_worker(worker):
+        first = asyncio.create_task(
+            window.submit(conversation_id="conv_h", assignee_key="ahmed", task="يجيب الكهربائي")
+        )
+        await asyncio.sleep(0.5)  # correction arrives after the grace, before quiet+tail
+        assert container.store.status_counts() == {}
+        second = await window.submit(
+            conversation_id="conv_h",
+            assignee_key="mohamed",
+            task="يجيب الكهربائي",
+            mode="replace_last",
+        )
+        assert (await first)["status"] == "replaced"
+    assert second["status"] == "created"
+
+
+async def test_hold_is_bounded(container):
+    activity = FakeActivity(speaking_for=60)  # e.g. background noise that never stops
+    window = TaskWindow(
+        container,
+        grace_seconds=0.05,
+        done_wait_seconds=0.05,
+        poll_seconds=0.01,
+        activity=activity,
+        speech_tail_seconds=0.2,
+        max_hold_seconds=0.2,
+    )
+    started = asyncio.get_running_loop().time()
+    result = await window.submit(conversation_id="conv_b", assignee_key="ahmed", task="مهمة")
+    assert result["status"] in {"queued", "created"}
+    assert asyncio.get_running_loop().time() - started < 1.0

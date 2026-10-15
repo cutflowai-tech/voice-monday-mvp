@@ -312,18 +312,27 @@ def cmd_el_bridge(args: argparse.Namespace, settings: Settings) -> int:
         problems.append("ELEVENLABS_AGENT_ID is required (or run `el-agent sync` first)")
     if problems:
         raise ConfigError("el-bridge", problems)
-    bridge = ElevenLabsBridge(
-        api_key=settings.elevenlabs_api_key,
-        agent_id=agent_id,
-        base_url=settings.elevenlabs_base_url,
-        host=settings.el_bridge_host,
-        port=settings.el_bridge_port,
-    )
 
     async def run() -> None:
+        import redis.asyncio as aioredis
+
+        from voice_agent.agent_tools.activity import SpeechActivity
+
+        redis = aioredis.from_url(settings.redis_url, socket_timeout=0.5)
+        bridge = ElevenLabsBridge(
+            api_key=settings.elevenlabs_api_key,
+            agent_id=agent_id,
+            base_url=settings.elevenlabs_base_url,
+            host=settings.el_bridge_host,
+            port=settings.el_bridge_port,
+            activity=SpeechActivity(redis, settings.queue_name),
+        )
         stop = asyncio.Event()
         _install_stop_handlers(stop)
-        await bridge.serve(stop)
+        try:
+            await bridge.serve(stop)
+        finally:
+            await redis.aclose()
 
     asyncio.run(run())
     return 0

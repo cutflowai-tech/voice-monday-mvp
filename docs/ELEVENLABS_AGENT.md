@@ -1,14 +1,30 @@
 # Fast AI assistant: ElevenLabs Agent on extension 778
 
 ```
-Phone → Asterisk ext 778 ─SIP/TLS + X-CALLER-ID─▶ ElevenLabs Agent (listening · AI · turn-taking · voice)
-                                                     │ says the acknowledgment, then calls submit_task
-                                                     ▼ HTTPS via Cloudflare Tunnel (bearer secret)
-                         api: /agent/tools/submit_task → 2 s grace window → job → worker → Monday
-                                                     │ {"status": "created"}
-                                                     ▼
-                                     Agent: «Done، خلاص حطيت التاسك»
+Phone → Asterisk ext 778: Answer + AudioSocket ─TCP 127.0.0.1:9019─▶ el-bridge
+                                         │ outbound TLS WebSocket (signed URL per call)
+                                         ▼
+                ElevenLabs Agent (listening · AI · turn-taking · voice)
+                                         │ says the acknowledgment, then calls submit_task
+                                         ▼ HTTPS via Cloudflare Tunnel (bearer secret)
+       api: /agent/tools/submit_task → 2 s grace window (held while you still talk)
+            → job → worker → Monday → {"status": "created"} → «Done، خلاص حطيت التاسك»
 ```
+
+Why a bridge instead of SIP: the office reaches the internet through a load balancer over
+several lines with rotating public IPs, so SIP/RTP from ElevenLabs never found its way back
+(one-way audio). The bridge uses only local TCP and an outbound WebSocket, so NAT doesn't
+matter. The SIP mode is kept in the PBX script for a network with one stable public IP.
+
+The bridge (`voice-agent el-bridge`, compose profile `agent`/`agent-quick`):
+
+- plays ringback while the agent connects (about 0.5 s with a prefetched signed URL), so
+  she "picks up" with «ألو» instead of the caller hearing dead air;
+- streams 20 ms frames continuously (silence between words), because Asterisk's
+  AudioSocket hangs up after 2 s without data;
+- passes the caller's extension (carried in the AudioSocket UUID) as `caller_id`;
+- marks caller speech in Redis, so the grace window waits until 1.5 s after the caller
+  stops talking (at most 6 s more) before saving.
 
 The conversation the user hears:
 
@@ -101,7 +117,7 @@ Per-turn latency is visible in the ElevenLabs conversation history; our side log
 |---|---|---|
 | `turn.turn_eagerness` | `eager` | Answers sooner after you stop talking |
 | `turn.speculative_turn` | `true` | Starts thinking during the pause (more LLM cost) |
-| `ELEVENLABS_AGENT_LLM` | `gemini-2.5-flash` | Faster model → faster first word |
+| `ELEVENLABS_AGENT_LLM` | `gemini-2.5-flash-lite` | Measured 2026-10-15: ack 0.92 s after you stop (2.5-flash: 2.15 s; 4.6 s before «Done») |
 | `ELEVENLABS_AGENT_TTS_MODEL` | `eleven_v4_turbo` | Lowest-latency voice model |
 | `ELEVENLABS_TOOL_EXECUTION_MODE` | `post_tool_speech` | Window starts after her acknowledgment; `immediate` starts it while she speaks |
 

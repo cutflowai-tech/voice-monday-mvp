@@ -14,11 +14,13 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from voice_agent.agent_tools.activity import SpeechActivity
 from voice_agent.agent_tools.router import router as agent_tools_router
 from voice_agent.agent_tools.window import TaskWindow
 from voice_agent.config import Role, Settings, load_settings
 from voice_agent.container import Container, build_container
 from voice_agent.conversation.engine import ConversationState
+from voice_agent.jobs.queue import RedisJobQueue
 from voice_agent.logging_setup import configure_logging, get_logger
 from voice_agent.telephony.media import SAFE_NAME
 
@@ -83,11 +85,17 @@ def create_app(settings: Settings | None = None, container: Container | None = N
         app.state.container = container
         app.state.sessions = SimulatedSessions()
         s = container.settings
+        activity = None
+        if s.agent_tool_secret and isinstance(container.queue, RedisJobQueue):
+            activity = SpeechActivity(container.queue.redis, s.queue_name)
         app.state.task_window = (
             TaskWindow(
                 container,
                 grace_seconds=s.agent_grace_seconds,
                 done_wait_seconds=s.agent_done_wait_seconds,
+                activity=activity,
+                speech_tail_seconds=s.agent_speech_tail_seconds,
+                max_hold_seconds=s.agent_max_hold_seconds,
             )
             if s.agent_tool_secret
             else None

@@ -13,10 +13,12 @@ from voice_agent.telephony.el_bridge import (
     KIND_HANGUP,
     KIND_UUID,
     BridgeCall,
+    ElevenLabsBridge,
     caller_from_uuid,
     frame,
     pcm_rate,
     resample,
+    ringback_frame,
 )
 
 
@@ -132,9 +134,28 @@ async def test_call_streams_audio_both_ways_and_hangs_up_cleanly():
 
     frames = writer.frames()
     audio = [payload for kind, payload in frames if kind == 0x10]
-    assert len(audio) == 2 and all(len(p) == 320 for p in audio)  # 40 ms -> two 20 ms @ 8k
+    assert all(len(p) == 320 for p in audio)  # 20 ms frames at 8 kHz
+    assert len(audio) >= 5  # continuous stream (silence + her 40 ms), never a 2 s gap
     assert frames[-1] == (KIND_HANGUP, b"")
     assert ws.closed and writer.closed
+
+
+async def test_ringback_is_streamed_while_the_agent_connects():
+    """Asterisk drops an AudioSocket after 2 s without data; setup can take seconds."""
+    reader = asyncio.StreamReader()
+    reader.feed_data(frame(KIND_UUID, uuid.uuid4().bytes))
+    writer = FakeWriter()
+
+    async def slow_agent(caller):
+        await asyncio.sleep(0.3)
+        raise ConnectionError("agent unavailable")
+
+    with pytest.raises(ConnectionError):
+        await BridgeCall(reader, writer, open_agent=slow_agent).run()
+    ring = [p for kind, p in writer.frames() if kind == 0x10]
+    assert len(ring) >= 10 and all(len(p) == 320 for p in ring)
+    assert any(p != bytes(320) for p in ring)  # the caller hears ringback, not dead air
+    assert writer.frames()[-1] == (KIND_HANGUP, b"") and writer.closed
 
 
 async def test_interruption_drops_queued_agent_audio():
@@ -157,3 +178,58 @@ async def test_first_message_must_be_the_uuid():
     reader.feed_data(frame(0x10, bytes(320)))
     with pytest.raises(ValueError):
         await BridgeCall(reader, FakeWriter(), open_agent=None).run()
+
+
+def test_ringback_cadence():
+    on = ringback_frame(8000, 0)
+    off = ringback_frame(8000, int(8000 * 2.5))  # 2.5 s in: inside the 1 s gap
+    assert len(on) == len(off) == 320
+    assert any(on) and not any(off)
+
+
+async def test_signed_url_is_prefetched_and_used_once():
+    bridge = ElevenLabsBridge(
+        api_key="k", agent_id="agent_1", base_url="https://x", host="127.0.0.1", port=0
+    )
+    fetched = []
+
+    async def fake_fetch():
+        fetched.append(len(fetched))
+        return f"wss://signed/{len(fetched)}"
+
+    bridge._fetch_signed_url = fake_fetch
+    await bridge._refill()
+    assert await bridge.signed_url() == "wss://signed/1"  # prefetched, no wait
+    await asyncio.sleep(0)  # let the background refill run
+    await bridge._prefetch
+    assert await bridge.signed_url() == "wss://signed/2"  # never reused
+    await bridge._client.aclose()
+
+
+def test_energy_vad():
+    from voice_agent.agent_tools.activity import is_speech
+
+    loud = b"".join(int(v).to_bytes(2, "little", signed=True) for v in [3000, -3000] * 80)
+    assert is_speech(loud)
+    assert not is_speech(bytes(320))
+
+
+async def test_loud_caller_audio_marks_speech_for_the_conversation():
+    marks = []
+
+    async def on_speech(conversation_id):
+        marks.append(conversation_id)
+
+    loud = b"".join(int(v).to_bytes(2, "little", signed=True) for v in [3000, -3000] * 80)
+    reader = asyncio.StreamReader()
+    reader.feed_data(frame(0x10, bytes(320)) + frame(0x10, loud) + frame(KIND_HANGUP))
+
+    class Sink:
+        async def send(self, data):
+            return None
+
+    call = BridgeCall(reader, FakeWriter(), open_agent=None, on_speech=on_speech)
+    call.conversation_id = "conv_v"
+    await call._asterisk_to_agent(Sink())
+    await asyncio.sleep(0)
+    assert marks == ["conv_v"]

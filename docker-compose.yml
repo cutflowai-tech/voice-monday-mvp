@@ -74,6 +74,9 @@ services:
     profiles: ["agent", "agent-quick"]
     network_mode: host
     depends_on: []
+    environment:
+      # host network: reach Redis on loopback (published by docker-compose.pbx-host.yml)
+      REDIS_URL: redis://127.0.0.1:6379/0
     stop_grace_period: 15s
 
   # Hosted voice agent webhook exposure: `docker compose --profile agent up -d cloudflared`.

@@ -124,11 +124,14 @@ class Settings(BaseSettings):
     agent_tool_secret: str = ""
     agent_grace_seconds: float = Field(default=2.0, ge=0, le=10)
     agent_done_wait_seconds: float = Field(default=5.0, ge=0, le=20)
+    # Keep the window open while the caller is still talking (needs the el-bridge + Redis).
+    agent_speech_tail_seconds: float = Field(default=1.5, ge=0, le=5)
+    agent_max_hold_seconds: float = Field(default=6.0, ge=0, le=20)
     agent_public_url: str = ""  # https URL of the Cloudflare Tunnel (only /agent/tools/*)
     elevenlabs_agent_id: str = ""
     elevenlabs_phone_number_id: str = ""
     elevenlabs_agent_voice_id: str = "I3u6waC588j43py1kDN2"  # Fatima, Egyptian (paid plan)
-    elevenlabs_agent_llm: str = "gemini-2.5-flash"
+    elevenlabs_agent_llm: str = "gemini-2.5-flash-lite"
     elevenlabs_agent_tts_model: str = "eleven_v4_turbo"
     elevenlabs_tool_execution_mode: Literal["immediate", "post_tool_speech", "async"] = (
         "post_tool_speech"

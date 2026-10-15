@@ -88,7 +88,9 @@ async def test_first_sync_creates_everything_with_documented_shapes(el_settings,
     assert agent["agent"]["language"] == "ar"
     assert agent["agent"]["prompt"]["tool_ids"] == ["tool_2", "tool_3"]
     assert "mohamed: محمد" in agent["agent"]["prompt"]["prompt"]
-    assert "karim" not in agent["agent"]["prompt"]["prompt"]
+    prompt = agent["agent"]["prompt"]["prompt"]
+    assert "karim" not in prompt
+    assert '"already_saved"' in prompt and "Never claim you cancelled it" in prompt
     assert agent["tts"]["voice_id"] == "I3u6waC588j43py1kDN2"
     assert agent["turn"]["turn_eagerness"] == "eager"
 

@@ -60,8 +60,14 @@ class TaskWindow:
         done_wait_seconds: float = 5.0,
         poll_seconds: float = 0.1,
         idle_ttl_seconds: float = 3600.0,
+        activity=None,
+        speech_tail_seconds: float = 1.5,
+        max_hold_seconds: float = 6.0,
     ):
         self.c = container
+        self.activity = activity  # SpeechActivity: hold commits while the caller talks
+        self.speech_tail_seconds = speech_tail_seconds
+        self.max_hold_seconds = max_hold_seconds
         self.grace_seconds = grace_seconds
         self.done_wait_seconds = done_wait_seconds
         self.poll_seconds = poll_seconds
@@ -177,6 +183,7 @@ class TaskWindow:
             # wake is set early only to cancel/replace, or on shutdown (commit now)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(draft.wake.wait(), self.grace_seconds)
+            await self._hold_while_caller_speaks(conversation_id, draft)
             if draft.state != "waiting":
                 return
             draft.state = "committed"
@@ -185,6 +192,23 @@ class TaskWindow:
             log.exception("agent_tool.commit_failed", conversation_id=conversation_id)
             if not draft.result.done():
                 draft.result.set_result({"status": "failed", "problem": repr(exc)})
+
+    async def _hold_while_caller_speaks(self, conversation_id: str, draft: Draft) -> None:
+        """A correction only arrives after the caller stops talking and the agent reacts:
+        keep the draft open until ``speech_tail_seconds`` of quiet (bounded)."""
+        if self.activity is None:
+            return
+        deadline = draft.created_at + self.grace_seconds + self.max_hold_seconds
+        held = False
+        while not draft.wake.is_set() and time.monotonic() < deadline:
+            since = await self.activity.seconds_since_speech(conversation_id)
+            if since is None or since >= self.speech_tail_seconds:
+                break
+            if not held:
+                held = True
+                log.info("agent_tool.held_for_speech", conversation_id=conversation_id)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(draft.wake.wait(), self.poll_seconds)
 
     async def _commit(self, conversation_id: str, draft: Draft) -> dict[str, Any]:
         handler = self.c.commands.get(Action.CREATE_TASK)

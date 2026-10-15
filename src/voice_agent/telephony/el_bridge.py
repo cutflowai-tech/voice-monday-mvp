@@ -27,6 +27,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import math
 import struct
 import time
 import uuid
@@ -35,6 +36,7 @@ from typing import Any
 
 import httpx
 
+from voice_agent.agent_tools.activity import is_speech
 from voice_agent.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -55,6 +57,13 @@ AUDIO_RATES = {
     0x18: 192000,
 }
 FRAME_SECONDS = 0.02
+# Ringback while the agent connects (Egypt: 425 Hz, 2 s on / 1 s off), so the caller hears
+# ringing instead of dead air and the agent "picks up" with her first words.
+RINGBACK_HZ = 425
+RINGBACK_ON_S = 2.0
+RINGBACK_PERIOD_S = 3.0
+RINGBACK_AMPLITUDE = 4000
+SIGNED_URL_MAX_AGE_S = 60.0
 
 
 # ------------------------------------------------------------------ audio helpers
@@ -86,6 +95,17 @@ def resample(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
     return out.tobytes()
 
 
+def ringback_frame(rate: int, start_sample: int) -> bytes:
+    """One 20 ms frame of the ringback cadence starting at ``start_sample``."""
+    n = int(rate * FRAME_SECONDS)
+    out = array("h", bytes(2 * n))
+    for i in range(n):
+        t = (start_sample + i) / rate
+        if t % RINGBACK_PERIOD_S < RINGBACK_ON_S:
+            out[i] = int(RINGBACK_AMPLITUDE * math.sin(2 * math.pi * RINGBACK_HZ * t))
+    return out.tobytes()
+
+
 def pcm_rate(fmt: str) -> int:
     """'pcm_16000' -> 16000. Only PCM is supported over AudioSocket."""
     prefix, _, rate = fmt.partition("_")
@@ -113,8 +133,10 @@ class BridgeCall:
         writer: asyncio.StreamWriter,
         *,
         open_agent,
+        on_speech=None,
     ):
         self.reader = reader
+        self.on_speech = on_speech  # async (conversation_id) -> None, e.g. SpeechActivity.mark
         self.writer = writer
         self.open_agent = open_agent  # async (caller) -> websocket-like
         self.asterisk_kind = 0x10  # answer in whatever rate Asterisk speaks
@@ -126,6 +148,8 @@ class BridgeCall:
         self.closed = asyncio.Event()
         self._user_spoke_at: float | None = None
         self._background: set[asyncio.Task] = set()
+        self.connecting = True  # ringback until the agent's conversation has started
+        self._ring_sample = 0
 
     @property
     def asterisk_rate(self) -> int:
@@ -137,9 +161,13 @@ class BridgeCall:
         if kind != KIND_UUID or len(payload) != 16:
             raise ValueError(f"expected UUID first, got type {kind:#x}")
         self.caller = caller_from_uuid(payload)
-        ws = await self.open_agent(self.caller)
+        # AudioSocket hangs up after 2 s without data from us: stream (silence) from now on.
+        pacer = asyncio.create_task(self._pace_playback())
+        ws = None
         try:
+            ws = await self.open_agent(self.caller)
             await self._await_metadata(ws)
+            self.connecting = False
             log.info(
                 "el_bridge.connected",
                 caller=self.caller,
@@ -149,7 +177,7 @@ class BridgeCall:
             tasks = [
                 asyncio.create_task(self._asterisk_to_agent(ws)),
                 asyncio.create_task(self._agent_to_asterisk(ws)),
-                asyncio.create_task(self._pace_playback()),
+                pacer,
             ]
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
@@ -162,8 +190,13 @@ class BridgeCall:
                     log.warning("el_bridge.task_failed", error=repr(task.exception()))
         finally:
             self.closed.set()
-            with contextlib.suppress(Exception):
-                await ws.close()
+            if not pacer.done():
+                pacer.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pacer
+            if ws is not None:
+                with contextlib.suppress(Exception):
+                    await ws.close()
             with contextlib.suppress(Exception):
                 self.writer.write(frame(KIND_HANGUP))
                 await self.writer.drain()
@@ -176,6 +209,7 @@ class BridgeCall:
             )
 
     async def _await_metadata(self, ws) -> None:
+        t0 = time.monotonic()
         while True:
             message = json.loads(await asyncio.wait_for(ws.recv(), 10))
             if message.get("type") == "conversation_initiation_metadata":
@@ -183,6 +217,7 @@ class BridgeCall:
                 self.conversation_id = event.get("conversation_id")
                 self.agent_out_rate = pcm_rate(event.get("agent_output_audio_format", "pcm_16000"))
                 self.agent_in_rate = pcm_rate(event.get("user_input_audio_format", "pcm_16000"))
+                log.info("el_bridge.metadata", wait_ms=round((time.monotonic() - t0) * 1000))
                 return
             if message.get("type") == "ping":
                 await self._pong(ws, message)
@@ -192,6 +227,10 @@ class BridgeCall:
             kind, payload = await read_message(self.reader)
             if kind in AUDIO_RATES:
                 self.asterisk_kind = kind
+                if self.on_speech and self.conversation_id and is_speech(payload):
+                    mark = asyncio.create_task(self.on_speech(self.conversation_id))
+                    self._background.add(mark)
+                    mark.add_done_callback(self._background.discard)
                 pcm = resample(payload, AUDIO_RATES[kind], self.agent_in_rate)
                 await ws.send(json.dumps({"user_audio_chunk": base64.b64encode(pcm).decode()}))
             elif kind in (KIND_HANGUP, KIND_ERROR):
@@ -232,11 +271,16 @@ class BridgeCall:
         next_at = time.monotonic()
         while True:
             size = int(self.asterisk_rate * FRAME_SECONDS) * 2
-            if len(self.out_buffer) >= size:
+            if self.connecting:
+                chunk = ringback_frame(self.asterisk_rate, self._ring_sample)
+                self._ring_sample += size // 2
+            elif len(self.out_buffer) >= size:
                 chunk = bytes(self.out_buffer[:size])
                 del self.out_buffer[:size]
-                self.writer.write(frame(self.asterisk_kind, chunk))
-                await self.writer.drain()
+            else:
+                chunk = bytes(size)  # silence keeps the AudioSocket alive between words
+            self.writer.write(frame(self.asterisk_kind, chunk))
+            await self.writer.drain()
             next_at += FRAME_SECONDS
             delay = next_at - time.monotonic()
             if delay < -0.2:  # fell far behind (e.g. a stall): resynchronise
@@ -255,28 +299,76 @@ class BridgeCall:
 
 # ------------------------------------------------------------------ server
 class ElevenLabsBridge:
-    def __init__(self, *, api_key: str, agent_id: str, base_url: str, host: str, port: int):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        agent_id: str,
+        base_url: str,
+        host: str,
+        port: int,
+        activity=None,
+    ):
+        self.activity = activity  # SpeechActivity: lets the task window wait for the caller
         self.api_key = api_key
         self.agent_id = agent_id
         self.base_url = base_url.rstrip("/")
         self.host = host
         self.port = port
         self.calls: set[asyncio.Task] = set()
+        # kept-alive connection + one signed URL fetched ahead of the next call
+        self._client = httpx.AsyncClient(base_url=self.base_url, timeout=10)
+        self._ready_url: tuple[float, str] | None = None
+        self._prefetch: asyncio.Task | None = None
+
+    async def _fetch_signed_url(self) -> str:
+        response = await self._client.get(
+            "/v1/convai/conversation/get-signed-url",
+            params={"agent_id": self.agent_id},
+            headers={"xi-api-key": self.api_key},
+        )
+        response.raise_for_status()
+        return response.json()["signed_url"]
+
+    async def _refill(self) -> None:
+        try:
+            self._ready_url = (time.monotonic(), await self._fetch_signed_url())
+        except Exception as exc:
+            log.warning("el_bridge.prefetch_failed", error=repr(exc))
+
+    def _schedule_refill(self) -> None:
+        if self._prefetch is None or self._prefetch.done():
+            self._prefetch = asyncio.create_task(self._refill())
 
     async def signed_url(self) -> str:
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=10) as client:
-            response = await client.get(
-                "/v1/convai/conversation/get-signed-url",
-                params={"agent_id": self.agent_id},
-                headers={"xi-api-key": self.api_key},
-            )
-            response.raise_for_status()
-            return response.json()["signed_url"]
+        """A prefetched URL when fresh (one per call), else a new one; always refill."""
+        ready, self._ready_url = self._ready_url, None
+        self._schedule_refill()
+        if ready and time.monotonic() - ready[0] < SIGNED_URL_MAX_AGE_S:
+            return ready[1]
+        return await self._fetch_signed_url()
+
+    async def keep_warm(self, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            if self._ready_url is None or (
+                time.monotonic() - self._ready_url[0] > SIGNED_URL_MAX_AGE_S / 2
+            ):
+                await self._refill()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), 10)
 
     async def open_agent(self, caller: str | None):
         from websockets.asyncio.client import connect
 
-        ws = await connect(await self.signed_url(), max_size=2**22)
+        t0 = time.monotonic()
+        url = await self.signed_url()
+        t1 = time.monotonic()
+        ws = await connect(url, max_size=2**22)
+        log.info(
+            "el_bridge.opening",
+            signed_url_ms=round((t1 - t0) * 1000),
+            connect_ms=round((time.monotonic() - t1) * 1000),
+        )
         await ws.send(
             json.dumps(
                 {
@@ -292,7 +384,12 @@ class ElevenLabsBridge:
         if task:
             self.calls.add(task)
         try:
-            await BridgeCall(reader, writer, open_agent=self.open_agent).run()
+            await BridgeCall(
+                reader,
+                writer,
+                open_agent=self.open_agent,
+                on_speech=self.activity.mark if self.activity else None,
+            ).run()
         except Exception as exc:
             log.warning("el_bridge.call_failed", error=repr(exc))
             with contextlib.suppress(Exception):
@@ -306,7 +403,11 @@ class ElevenLabsBridge:
     async def serve(self, stop: asyncio.Event) -> None:
         server = await asyncio.start_server(self.handle, self.host, self.port)
         log.info("el_bridge.listening", host=self.host, port=self.port, agent_id=self.agent_id)
+        warm = asyncio.create_task(self.keep_warm(stop))
         async with server:
             await stop.wait()
         if self.calls:
             await asyncio.wait(self.calls, timeout=10)
+        warm.cancel()
+        await asyncio.gather(warm, return_exceptions=True)
+        await self._client.aclose()
