@@ -120,6 +120,23 @@ class Settings(BaseSettings):
     agent_model: str = "gpt-4.1-mini"
     agent_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
     review_before_submit: bool = True
+    # Hosted voice agent (ElevenLabs) tools: /agent/tools/* exists only with a secret.
+    agent_tool_secret: str = ""
+    agent_grace_seconds: float = Field(default=2.0, ge=0, le=10)
+    agent_done_wait_seconds: float = Field(default=5.0, ge=0, le=20)
+    agent_public_url: str = ""  # https URL of the Cloudflare Tunnel (only /agent/tools/*)
+    elevenlabs_agent_id: str = ""
+    elevenlabs_phone_number_id: str = ""
+    elevenlabs_agent_voice_id: str = "I3u6waC588j43py1kDN2"  # Fatima, Egyptian (paid plan)
+    elevenlabs_agent_llm: str = "gemini-2.5-flash"
+    elevenlabs_agent_tts_model: str = "eleven_v4_turbo"
+    elevenlabs_tool_execution_mode: Literal["immediate", "post_tool_speech", "async"] = (
+        "post_tool_speech"
+    )
+    # SIP identifier the PBX dials (sip:<number>@sip.rtc.elevenlabs.io) and digest credentials.
+    elevenlabs_sip_number: str = "778"
+    elevenlabs_sip_username: str = ""
+    elevenlabs_sip_password: str = ""
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "json"
 
@@ -168,6 +185,8 @@ class Settings(BaseSettings):
 
         if role in (Role.API, Role.WORKER, Role.ARI):
             need("REDIS_URL", "DATABASE_URL")
+        if role is Role.API and self.agent_tool_secret and len(self.agent_tool_secret) < 32:
+            problems.append("AGENT_TOOL_SECRET must be at least 32 characters")
         if role is Role.ARI:
             need(
                 "ASTERISK_ARI_URL",

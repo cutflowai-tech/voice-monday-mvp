@@ -14,6 +14,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from voice_agent.agent_tools.router import router as agent_tools_router
+from voice_agent.agent_tools.window import TaskWindow
 from voice_agent.config import Role, Settings, load_settings
 from voice_agent.container import Container, build_container
 from voice_agent.conversation.engine import ConversationState
@@ -80,14 +82,41 @@ def create_app(settings: Settings | None = None, container: Container | None = N
             container = build_container(settings)
         app.state.container = container
         app.state.sessions = SimulatedSessions()
-        log.info("api.started", monday_mode=container.settings.monday_mode)
+        s = container.settings
+        app.state.task_window = (
+            TaskWindow(
+                container,
+                grace_seconds=s.agent_grace_seconds,
+                done_wait_seconds=s.agent_done_wait_seconds,
+            )
+            if s.agent_tool_secret
+            else None
+        )
+        log.info(
+            "api.started",
+            monday_mode=s.monday_mode,
+            agent_tools=app.state.task_window is not None,
+        )
         try:
             yield
         finally:
+            if app.state.task_window:
+                await app.state.task_window.aclose()
             await container.aclose()
             log.info("api.stopped")
 
     app = FastAPI(title="Voice Monday Agent", version="0.1.0", lifespan=lifespan)
+    app.include_router(agent_tools_router)
+
+    @app.middleware("http")
+    async def only_agent_tools_from_tunnel(request: Request, call_next):
+        # Requests relayed by Cloudflare always carry CF-Connecting-IP. Whatever the
+        # tunnel's path rules say, only the agent tools are reachable from outside.
+        if "cf-connecting-ip" in request.headers and not request.url.path.startswith(
+            "/agent/tools/"
+        ):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        return await call_next(request)
 
     def get_container(request: Request) -> Container:
         return request.app.state.container

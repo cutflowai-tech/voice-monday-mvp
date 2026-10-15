@@ -263,6 +263,43 @@ def cmd_migrate(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_el_agent(args: argparse.Namespace, settings: Settings) -> int:
+    import httpx
+
+    from voice_agent.domain.people import PeopleDirectory
+    from voice_agent.elevenlabs_agent import (
+        ElevenLabsAgentSync,
+        assignable_people,
+        build_agent,
+        build_tools,
+        missing_settings,
+    )
+
+    directory = PeopleDirectory.load(settings.people_directory_file or None)
+    if args.dry_run:
+        people = assignable_people(settings, directory)
+        tools = build_tools(settings, people, "<secret_id>")
+        _print_json({"tools": tools, "agent": build_agent(settings, people, ["<tool ids>"])})
+        return 0
+    problems = missing_settings(settings)
+    if problems:
+        raise ConfigError("el-agent sync", problems)
+
+    async def run() -> dict:
+        async with httpx.AsyncClient(base_url=settings.elevenlabs_base_url, timeout=30) as client:
+            sync = ElevenLabsAgentSync(settings, client, Path(args.state))
+            return await sync.run(directory, rotate_secret=args.rotate_secret)
+
+    state = asyncio.run(run())
+    _print_json(state)
+    print(
+        "\nPut these in .env: ELEVENLABS_AGENT_ID="
+        f"{state['agent_id']} ELEVENLABS_PHONE_NUMBER_ID={state.get('phone_number_id', '')}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def cmd_monday_inspect(args: argparse.Namespace, settings: Settings) -> int:
     from voice_agent.connectors.monday import MondayConfig, MondayGraphQLConnector
 
@@ -385,6 +422,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("monday-inspect", help="list board groups/columns/users").set_defaults(
         func=cmd_monday_inspect
     )
+
+    p = sub.add_parser("el-agent", help="create/update the ElevenLabs phone agent")
+    p.add_argument("action", choices=["sync"])
+    p.add_argument("--dry-run", action="store_true", help="print the payloads, send nothing")
+    p.add_argument("--rotate-secret", action="store_true", help="store a new tool secret")
+    p.add_argument("--state", default="data/elevenlabs-state.json")
+    p.set_defaults(func=cmd_el_agent)
 
     p = sub.add_parser("render-asterisk", help="render Asterisk config snippets")
     p.add_argument("--out", default="build/asterisk")

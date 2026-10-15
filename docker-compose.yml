@@ -66,6 +66,18 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # Hosted voice agent webhook exposure: `docker compose --profile agent up -d cloudflared`.
+  # In the Cloudflare dashboard map the public hostname to http://127.0.0.1:8000 with path
+  # ^/agent/tools/ ; the API also refuses any other path that arrives through Cloudflare.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.8.0
+    profiles: ["agent"]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    network_mode: host
+    restart: unless-stopped
+
   tests:
     build:
       context: .

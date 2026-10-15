@@ -96,6 +96,13 @@ More assignees need no code: add `MONDAY_AHMED_PERSON_ID=...` and make sure the 
 in the people directory ([src/voice_agent/people.json](src/voice_agent/people.json), or a
 custom file set with `PEOPLE_DIRECTORY_FILE`).
 
+### Fast AI assistant (ElevenLabs Agent, extension 778)
+
+A hosted ElevenLabs Agent answers extension 778 with sub-second replies and real AI
+conversation. It calls this server's `/agent/tools/submit_task`, which holds each task
+for a 2-second correction window and only reports "Done" once the Monday item exists.
+Setup: [docs/ELEVENLABS_AGENT.md](docs/ELEVENLABS_AGENT.md).
+
 ### Phone calls via Asterisk
 
 Follow [docs/ASTERISK.md](docs/ASTERISK.md). The assistant extension is **777**; route it

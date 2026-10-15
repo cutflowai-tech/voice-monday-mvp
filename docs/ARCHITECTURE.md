@@ -7,6 +7,7 @@ One repository, three small processes that share one SQLite file and one Redis:
 | `ari` | `voice-agent ari` | Phone calls: Asterisk ARI → STT → engine → TTS |
 | `api` | `voice-agent api` | `/health`, `/ready`, `/simulate`, `/jobs/{id}`, `/jobs/{id}/events` |
 | `worker` | `voice-agent worker` | Executes durable jobs through connectors, with retries |
+| ElevenLabs Agent (hosted) | `voice-agent el-agent sync` | Extension 778: listening, AI and voice in the cloud; calls `/agent/tools/*` on `api` ([details](ELEVENLABS_AGENT.md)) |
 
 ```
                          ┌──────────────────────── call session (per call, in memory) ─────────────────────────┐
@@ -24,6 +25,10 @@ Asterisk ─ARI─► AriCallChannel ─► VoiceLoop ─► SpeechToTextProvide
 Redis ─► Worker ─► JobStore.claim (guarded UPDATE) ─► Connector.execute ─► complete / retry / failed / dead_letter
                          └───────────────────────────────────────────────────────────────────────┘
 ```
+
+`/agent/tools/*` keeps its 2-second grace-window drafts in the `api` process memory
+(one uvicorn process). Committed tasks are durable like every other job; a draft that is
+still inside its window when the API stops is committed during shutdown.
 
 ## Key guarantees
 
