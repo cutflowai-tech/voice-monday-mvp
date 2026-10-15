@@ -56,9 +56,14 @@ write_audiosocket() {
 [voice-monday-el]
 exten => $EXT,1,NoOp(voice-monday ElevenLabs agent call from \${CALLERID(num)})
  same => n,Answer()
+ same => n,Set(VM_START=\${EPOCH})
  same => n,Set(VM_CID=000000000000\${FILTER(0123456789,\${CALLERID(num)})})
  same => n,AudioSocket(\${UUID():0:24}\${VM_CID:-12},127.0.0.1:$BRIDGE_PORT)
+ ; the agent could not start (e.g. no ElevenLabs credits): busy tone, not a silent drop
+ same => n,GotoIf(\$[\${EPOCH} - \${VM_START} < 3]?unavailable)
  same => n,Hangup()
+ same => n(unavailable),NoOp(voice-monday agent unavailable for \${CALLERID(num)})
+ same => n,Congestion(4)
 EOF
 }
 

@@ -263,3 +263,11 @@ def test_sarah_greets_known_callers_by_name_and_varies_it():
     assert len(styles) >= 5  # each call nudges a different first wording
     anonymous = bridge.initiation(None)["dynamic_variables"]
     assert anonymous["caller_name"] == "unknown" and "سارة" in anonymous["opening"]
+
+
+async def test_late_pong_on_a_closed_socket_is_silent():
+    class Closed:
+        async def send(self, data):
+            raise ConnectionError("closed")
+
+    await BridgeCall._pong(Closed(), {"type": "ping", "ping_event": {"event_id": 1}})

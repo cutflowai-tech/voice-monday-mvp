@@ -295,7 +295,9 @@ class BridgeCall:
         delay = (event.get("ping_ms") or 0) / 1000
         if delay:
             await asyncio.sleep(min(delay, 1.0))
-        await ws.send(json.dumps({"type": "pong", "event_id": event.get("event_id")}))
+        # the call may have ended meanwhile; a late pong on a closed socket is harmless
+        with contextlib.suppress(Exception):
+            await ws.send(json.dumps({"type": "pong", "event_id": event.get("event_id")}))
 
 
 # ------------------------------------------------------------------ server

@@ -166,6 +166,17 @@ again after any restart of the `cloudflared-quick` container.
   every NAT layer of that line, and set `PBX_PUBLIC_IP` to that line's address. Ideally get a
   static IP from the ISP.
 
+## When Sarah is unavailable
+
+If the agent can't start, e.g. ElevenLabs answers `quota_exceeded` when the account is out
+of credits, the bridge closes within a second. Extension 778 then plays the busy tone for
+4 s instead of dropping silently. Check `el_bridge.call_failed` in the `el-bridge` logs.
+
+Credits: agent minutes are expensive. On 2026-10-15 the free plan's 10,000 credits were
+used up by about 11.5 minutes of calls (mostly test calls), and they reset monthly.
+Extension 777 also uses ElevenLabs for its voice, so it goes silent too when credits run
+out. Watch usage with `GET /v1/user/subscription`, and keep robot test calls short and few.
+
 ## Things to confirm on the first real calls
 
 - **The grace window during a pending tool call.** Whether the platform accepts a new user turn, and a second tool call, while `submit_task` is still waiting. If it doesn't, try `ELEVENLABS_TOOL_EXECUTION_MODE=async`. Either way the server prevents wrong or duplicate items.
