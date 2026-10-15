@@ -210,5 +210,5 @@ async def test_sync_renders_punchline_clips_once(el_settings, tmp_path):
         sync = ElevenLabsAgentSync(el_settings, client, tmp_path / "state.json")
         first = await sync.render_punchlines(tmp_path / "prank")
         second = await sync.render_punchlines(tmp_path / "prank")
-    assert len(first) == 4 and second == []
+    assert len(first) == 3 and second == []  # one clip for men, two for women
     assert all(p.startswith("/v1/text-to-speech/") for p in posts)

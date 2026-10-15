@@ -71,10 +71,7 @@ def style_for_call(rng: random.Random | None = None) -> dict[str, str]:
 # Punchline clips rendered once per voice with the expressive model (real laughter).
 # The vowel is marked on purpose: without it «خدتك» was read «خدتِك» (to a woman).
 PUNCHLINES = {
-    "m": (
-        "[mischievously] خَدتَك عليه! [bursts out laughing] [laughs hard]",
-        "خَدتَك عليه! [laughs hysterically] [wheezing] خَدتَك عليه!",
-    ),
+    "m": ("[mischievously] خَدتَك عليه! [bursts out laughing] [laughs hard]",),
     "f": (
         "[mischievously] خَدتِك عليه! [bursts out laughing] [laughs hard]",
         "خَدتِك عليه! [laughs hysterically] [wheezing] خَدتِك عليه!",
