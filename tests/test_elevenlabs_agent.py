@@ -76,12 +76,14 @@ async def test_first_sync_creates_everything_with_documented_shapes(el_settings,
     assert submit["api_schema"]["request_headers"] == {"Authorization": {"secret_id": "sec_1"}}
     props = submit["api_schema"]["request_body_schema"]["properties"]
     assert props["conversation_id"]["dynamic_variable"] == "system__conversation_id"
-    assert props["caller_id"]["dynamic_variable"] == "system__caller_id"
+    assert props["caller_id"]["dynamic_variable"] == "caller_id"  # set by the AudioSocket bridge
     assert props["assignee_key"]["enum"] == ["mohamed", "ahmed"]  # only people with Monday ids
     assert submit["pre_tool_speech"] == "force"
     assert 5 <= submit["response_timeout_secs"] <= 300
 
-    agent = by_path[("POST", "/v1/convai/agents/create")]["conversation_config"]
+    agent_body = by_path[("POST", "/v1/convai/agents/create")]
+    assert agent_body["platform_settings"]["auth"]["enable_auth"] is True  # signed URLs only
+    agent = agent_body["conversation_config"]
     assert agent["agent"]["first_message"] == "ألو"
     assert agent["agent"]["language"] == "ar"
     assert agent["agent"]["prompt"]["tool_ids"] == ["tool_2", "tool_3"]

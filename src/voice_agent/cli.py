@@ -300,6 +300,35 @@ def cmd_el_agent(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_el_bridge(args: argparse.Namespace, settings: Settings) -> int:
+    from voice_agent.telephony.el_bridge import ElevenLabsBridge
+
+    agent_id = settings.elevenlabs_agent_id
+    state = Path(args.state)
+    if not agent_id and state.is_file():
+        agent_id = json.loads(state.read_text(encoding="utf-8")).get("agent_id", "")
+    problems = [] if settings.elevenlabs_api_key else ["ELEVENLABS_API_KEY is required"]
+    if not agent_id:
+        problems.append("ELEVENLABS_AGENT_ID is required (or run `el-agent sync` first)")
+    if problems:
+        raise ConfigError("el-bridge", problems)
+    bridge = ElevenLabsBridge(
+        api_key=settings.elevenlabs_api_key,
+        agent_id=agent_id,
+        base_url=settings.elevenlabs_base_url,
+        host=settings.el_bridge_host,
+        port=settings.el_bridge_port,
+    )
+
+    async def run() -> None:
+        stop = asyncio.Event()
+        _install_stop_handlers(stop)
+        await bridge.serve(stop)
+
+    asyncio.run(run())
+    return 0
+
+
 def cmd_monday_inspect(args: argparse.Namespace, settings: Settings) -> int:
     from voice_agent.connectors.monday import MondayConfig, MondayGraphQLConnector
 
@@ -429,6 +458,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rotate-secret", action="store_true", help="store a new tool secret")
     p.add_argument("--state", default="data/elevenlabs-state.json")
     p.set_defaults(func=cmd_el_agent)
+
+    p = sub.add_parser("el-bridge", help="bridge Asterisk AudioSocket calls to the agent")
+    p.add_argument("--state", default="data/elevenlabs-state.json")
+    p.set_defaults(func=cmd_el_bridge)
 
     p = sub.add_parser("render-asterisk", help="render Asterisk config snippets")
     p.add_argument("--out", default="build/asterisk")

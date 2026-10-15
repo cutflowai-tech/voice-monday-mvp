@@ -137,6 +137,9 @@ class Settings(BaseSettings):
     elevenlabs_sip_number: str = "778"
     elevenlabs_sip_username: str = ""
     elevenlabs_sip_password: str = ""
+    # AudioSocket bridge (extension 778 -> 127.0.0.1:9019 -> ElevenLabs WebSocket)
+    el_bridge_host: str = "127.0.0.1"
+    el_bridge_port: int = Field(default=9019, ge=1, le=65535)
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "json"
 

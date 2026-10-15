@@ -66,6 +66,16 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # Extension 778: Asterisk AudioSocket -> 127.0.0.1:9019 -> ElevenLabs Agent WebSocket.
+  # Host networking so Asterisk on this host can reach it; it listens on loopback only.
+  el-bridge:
+    <<: *app
+    command: ["el-bridge"]
+    profiles: ["agent", "agent-quick"]
+    network_mode: host
+    depends_on: []
+    stop_grace_period: 15s
+
   # Hosted voice agent webhook exposure: `docker compose --profile agent up -d cloudflared`.
   # In the Cloudflare dashboard map the public hostname to http://127.0.0.1:8000 with path
   # ^/agent/tools/ ; the API also refuses any other path that arrives through Cloudflare.

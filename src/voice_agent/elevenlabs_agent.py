@@ -113,7 +113,7 @@ def build_tools(settings: Settings, people: list[Person], secret_id: str) -> dic
                 "required": ["conversation_id", "assignee_key", "task", "mode"],
                 "properties": {
                     "conversation_id": conversation,
-                    "caller_id": {"type": "string", "dynamic_variable": "system__caller_id"},
+                    "caller_id": {"type": "string", "dynamic_variable": "caller_id"},
                     "assignee_key": {
                         "type": "string",
                         "enum": [p.key for p in people],
@@ -187,6 +187,8 @@ def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -
             },
             "asr": {"provider": "scribe_realtime", "quality": "high"},
         },
+        # Only our bridge (with a signed URL from our API key) may start conversations.
+        "platform_settings": {"auth": {"enable_auth": True}},
     }
 
 
