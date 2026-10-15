@@ -78,6 +78,15 @@ services:
     network_mode: host
     restart: unless-stopped
 
+  # No-account alternative for testing: a random https://<words>.trycloudflare.com URL
+  # that changes on every restart (scripts/agent-quick-tunnel.sh re-points the agent).
+  cloudflared-quick:
+    image: cloudflare/cloudflared:2026.8.0
+    profiles: ["agent-quick"]
+    command: ["tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:8000"]
+    network_mode: host
+    restart: unless-stopped
+
   tests:
     build:
       context: .

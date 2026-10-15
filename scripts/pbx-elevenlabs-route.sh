@@ -86,7 +86,8 @@ local_net=$LOCAL_NET
 
 [elevenlabs]
 type=aor
-contact=sip:sip.rtc.elevenlabs.io:5061;transport=tls
+; ';' starts a comment in Asterisk configs, so the URI parameter must be escaped
+contact=sip:sip.rtc.elevenlabs.io:5061\\;transport=tls
 
 [elevenlabs-auth]
 type=auth

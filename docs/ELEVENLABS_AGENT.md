@@ -110,6 +110,29 @@ Per-turn latency is visible in the ElevenLabs conversation history; our side log
 - **About 0.4 s** needs the settings above and a good network path.
 - Monday never delays the acknowledgment, because she speaks before the tool runs.
 
+## No-account tunnel (testing)
+
+`scripts/agent-quick-tunnel.sh` starts a Cloudflare quick tunnel (random
+`https://<words>.trycloudflare.com`, no account), checks that only `/agent/tools/*` is
+reachable through it, and re-runs `el-agent sync` so the tools point at the new URL. Run it
+again after any restart of the `cloudflared-quick` container.
+
+## PBX notes from the first deployment (2026-10-15)
+
+- **SIP identifiers are global at ElevenLabs.** `778` was already taken by another
+  customer, so `ELEVENLABS_SIP_NUMBER` is a random `vmonday…` string. Callers still dial 778.
+- **Escape `;` in Asterisk configs.** It starts a comment, so the contact needs
+  `sip:sip.rtc.elevenlabs.io:5061\;transport=tls`.
+- **A new PJSIP TLS transport needs an Asterisk restart.** Without it, the SIP DNS resolver
+  doesn't know the transport and resolves nothing (`No resolution queries`,
+  `PJLIB_UTIL_EDNSNOANSWERREC`). Use `core restart when convenient`.
+- **One-way audio behind a multi-line load balancer.** The office reaches the internet
+  through `192.168.12.1`, which spreads traffic over several lines with different public IPs.
+  ElevenLabs hears the caller, but its audio never reaches the PBX. The fix is on the
+  network: send all PBX traffic over one line, forward UDP 10000–10100 to 192.168.0.118 on
+  every NAT layer of that line, and set `PBX_PUBLIC_IP` to that line's address. Ideally get a
+  static IP from the ISP.
+
 ## Things to confirm on the first real calls
 
 - **The grace window during a pending tool call.** Whether the platform accepts a new user turn, and a second tool call, while `submit_task` is still waiting. If it doesn't, try `ELEVENLABS_TOOL_EXECUTION_MODE=async`. Either way the server prevents wrong or duplicate items.
