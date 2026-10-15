@@ -216,26 +216,6 @@ async def test_prank_call_gets_a_clip_for_the_targets_gender(people, tmp_path):
     assert bridge.punchline_for(call_uuid) is None  # used once
 
 
-async def test_name_override_addresses_whoever_sits_at_the_extension(people):
-    bridge = ElevenLabsBridge(
-        api_key="k",
-        agent_id="a",
-        base_url="https://x",
-        host="127.0.0.1",
-        port=0,
-        ari=FakeAri(),
-        people=people,
-        outbound=object(),
-    )
-    request = OutboundRequest("ahmed", "102", "prank", None, time.time(), name_override="منصور")
-    await bridge.place_call(request)
-    call_uuid = uuid.UUID(bridge.ari.calls[0]["variables"]["VM_UUID"]).bytes
-    variables = bridge.initiation(None, call_uuid)["dynamic_variables"]
-    assert variables["caller_name"] == "منصور"
-    assert variables["opening"] == "ألو يا منصور، عايزاك في حاجة مهمة."
-    assert OutboundRequest.from_json(request.to_json()).name_override == "منصور"
-
-
 async def test_bridge_plays_the_punchline_itself_after_any_short_reply():
     import asyncio
 

@@ -29,9 +29,6 @@ class OutboundRequest:
     purpose: str
     requested_by: str | None  # person key of the caller who asked, if known
     requested_at: float
-    # address whoever is at that extension by another name (e.g. a colleague sitting at
-    # Ahmed's phone); set only by the owner from the server, never by the agent's tool
-    name_override: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

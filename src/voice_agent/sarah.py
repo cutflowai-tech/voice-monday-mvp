@@ -84,9 +84,8 @@ PRANK_OPENING = {
 }
 
 
-def prank_opening(target: Person, name: str | None = None) -> str:
-    gender = "f" if target.gender == "f" else "m"
-    return PRANK_OPENING[gender].format(name=name or target.name_ar)
+def prank_opening(target: Person) -> str:
+    return PRANK_OPENING["f" if target.gender == "f" else "m"].format(name=target.name_ar)
 
 
 def opening_for(caller: Person | None, rng: random.Random | None = None) -> str:

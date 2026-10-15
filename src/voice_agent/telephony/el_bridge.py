@@ -580,16 +580,15 @@ class ElevenLabsBridge:
                 clip = self.pick_punchline("f" if target.gender == "f" else "m")
                 if clip and call_uuid:
                     self.punchlines[call_uuid] = clip
-                name = request.name_override or target.name_ar
                 return {
                     "type": "conversation_initiation_client_data",
                     "dynamic_variables": {
                         "call_mode": request.purpose,
                         "caller_id": request.extension,
-                        "caller_name": name,
+                        "caller_name": target.name_ar,
                         "caller_gender": caller_gender(target),
                         "prank_by": requester.name_ar if requester else "حد من الفريق",
-                        "opening": prank_opening(target, name),
+                        "opening": prank_opening(target),
                         **style_for_call(),
                     },
                 }
