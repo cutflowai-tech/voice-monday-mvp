@@ -258,7 +258,8 @@ def test_sarah_greets_known_callers_by_name_and_varies_it():
     openings = {bridge.initiation("102")["dynamic_variables"]["opening"] for _ in range(60)}
     assert len(openings) >= 3  # not the same greeting every call
     female = {bridge.initiation("105")["dynamic_variables"]["opening"] for _ in range(60)}
-    assert "ألو يا سارة، أؤمري." in female and "ألو يا سارة، أؤمر." not in female
+    assert "ألو يا سارة، اؤمري." in female and "ألو يا سارة، اؤمر." not in female
+    assert not any("أؤمر" in o for o in openings | female)  # read as «اقمر»
     styles = {
         (v["ack_hint"], v["done_hint"])
         for v in (bridge.initiation("102")["dynamic_variables"] for _ in range(60))
