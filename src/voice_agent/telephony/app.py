@@ -8,7 +8,7 @@ from typing import Any
 
 from voice_agent.logging_setup import get_logger
 from voice_agent.telephony.ari_client import AriClient, AriEventBus
-from voice_agent.telephony.channel import AriCallChannel
+from voice_agent.telephony.channel import SNOOP_APP_ARG, AriCallChannel
 from voice_agent.telephony.media import SpeechRenderer
 from voice_agent.telephony.voice_loop import VoiceLoop
 
@@ -67,6 +67,8 @@ class AriApplication:
         channel_id = channel.get("id")
         if not channel_id or channel_id in self.sessions:
             return
+        if SNOOP_APP_ARG in (event.get("args") or []):
+            return  # our own audio-copy channel for a call already in progress
         if self._draining:
             log.warning("ari.rejecting_call_during_shutdown", channel_id=channel_id)
             asyncio.create_task(self.ari.hangup(channel_id, reason="congestion"))  # noqa: RUF006
@@ -98,6 +100,7 @@ class AriApplication:
             log.exception("call.crashed", call_id=call.call_id)
             await call.hangup()
         finally:
+            await asyncio.shield(call.release())
             call.close()
             self.sessions.pop(call.channel_id, None)
 

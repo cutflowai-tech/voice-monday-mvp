@@ -21,6 +21,8 @@ from voice_agent.telephony.media import SpeechRenderer
 log = get_logger(__name__)
 
 HANGUP_EVENTS = {"StasisEnd", "ChannelDestroyed", "ChannelHangupRequest"}
+# appArgs marking our own snoop channels, so their StasisStart is not taken for a call.
+SNOOP_APP_ARG = "voice-monday-snoop"
 
 
 class CallHungUp(Exception):
@@ -39,6 +41,10 @@ class CallChannel(ABC):
 
     async def prepare(self) -> None:
         """Check per-call prerequisites while the phone is still ringing."""
+        return None
+
+    async def release(self) -> None:
+        """Free per-call helper resources once the call is over."""
         return None
 
     async def working(self) -> None:
@@ -83,6 +89,11 @@ class AriCallChannel(CallChannel):
         self._talk_finished = asyncio.Event()
         self._talking = False
         self._pending_audio: bytes | None = None
+        # All caller audio is recorded on a snoop channel (a copy of the caller's audio).
+        # An Asterisk channel runs one media operation at a time, so recording on the
+        # call channel itself would hold every playback in a queue until it stopped.
+        self._snoop_id: str | None = None
+        self._snoop_unavailable = False
         self._hangup = asyncio.Event()
         self._turn = 0
         bus.on_channel(self.channel_id, self._on_channel_event)
@@ -128,6 +139,46 @@ class AriCallChannel(CallChannel):
             hangup.cancel()
         return future in done
 
+    async def _record_target(self) -> str:
+        """Channel to record caller audio on: the call's snoop channel when available."""
+        if self._snoop_id or self._snoop_unavailable:
+            return self._snoop_id or self.channel_id
+        snoop_id = f"vm-snoop-{uuid.uuid4().hex}"
+        try:
+            await self.ari.snoop(self.channel_id, snoop_id, spy="in", app_args=SNOOP_APP_ARG)
+        except AriError as exc:
+            if not self.active or exc.status == 404:
+                raise CallHungUp from exc
+            self._snoop_unavailable = True
+            log.warning("call.snoop_unavailable", call_id=self.call_id, error=str(exc))
+            return self.channel_id
+        self._snoop_id = snoop_id
+        log.info("call.snoop_started", call_id=self.call_id, snoop_id=snoop_id)
+        return snoop_id
+
+    async def _record_caller(self, name: str, **kwargs: Any) -> None:
+        """Start recording caller audio; recreate the snoop channel once if it vanished."""
+        for attempt in (1, 2):
+            target = await self._record_target()
+            try:
+                await self.ari.record(target, name, fmt="wav", **kwargs)
+                return
+            except AriError as exc:
+                snoop_gone = target == self._snoop_id and exc.status == 404 and self.active
+                if not snoop_gone or attempt == 2:
+                    raise
+                log.warning("call.snoop_lost", call_id=self.call_id, snoop_id=target)
+                self._snoop_id = None
+
+    async def release(self) -> None:
+        """Hang up the snoop channel (best effort; Asterisk also ends it with the call)."""
+        snoop_id, self._snoop_id = self._snoop_id, None
+        if snoop_id:
+            try:
+                await self.ari.hangup(snoop_id)
+            except AriError as exc:
+                log.warning("call.snoop_hangup_failed", call_id=self.call_id, error=str(exc))
+
     async def working(self) -> None:
         if not self.active or not self.working_cue_media:
             return
@@ -165,14 +216,17 @@ class AriCallChannel(CallChannel):
         started_at = time.monotonic()
         capture_name: str | None = None
         capture_future: asyncio.Future | None = None
-        if self._barge_in_enabled:
+        # Capture speech over the reply only on the snoop channel; on the call channel
+        # the capture would block the reply itself.
+        target = await self._record_target() if self._barge_in_enabled else self.channel_id
+        if self._barge_in_enabled and target != self.channel_id:
             self._talk_started.clear()
             self._talk_finished.clear()
             capture_name = f"vm-barge-{uuid.uuid4().hex}"
             capture_future = self.bus.expect("recording", capture_name)
             try:
                 await self.ari.record(
-                    self.channel_id,
+                    target,
                     capture_name,
                     fmt="wav",
                     max_duration_seconds=60,
@@ -294,12 +348,8 @@ class AriCallChannel(CallChannel):
         name = f"vm-{safe_channel}-{self._turn}-{uuid.uuid4().hex[:6]}"
         future = self.bus.expect("recording", name)
         try:
-            await self.ari.record(
-                self.channel_id,
-                name,
-                fmt="wav",
-                max_duration_seconds=max_seconds,
-                max_silence_seconds=max_silence_seconds,
+            await self._record_caller(
+                name, max_duration_seconds=max_seconds, max_silence_seconds=max_silence_seconds
             )
             log.info("call.recording_started", call_id=self.call_id, turn=self._turn)
             if self._turn == 1 and self.ready_cue_media and self.active:

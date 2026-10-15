@@ -10,8 +10,9 @@ import pytest
 
 from voice_agent.config import ConfigError, Role, Settings
 from voice_agent.speech.tts import ElevenLabsTTS, SynthesizedAudio
-from voice_agent.telephony.ari_client import AriClient, AriEventBus
-from voice_agent.telephony.channel import AriCallChannel, CallHungUp
+from voice_agent.telephony.app import AriApplication
+from voice_agent.telephony.ari_client import AriClient, AriError, AriEventBus
+from voice_agent.telephony.channel import SNOOP_APP_ARG, AriCallChannel, CallHungUp
 from voice_agent.telephony.media import MediaPublisher, SpeechRenderer
 
 # ------------------------------------------------------------------ config
@@ -153,7 +154,7 @@ class FakeAri:
         self.requests.append(("set_channel_var", variable, value))
 
     async def play(self, channel_id, media, playback_id):
-        self.requests.append(("play", media))
+        self.requests.append(("play", media, channel_id))
         asyncio.get_running_loop().call_soon(
             self.bus.dispatch, {"type": "PlaybackFinished", "playback": {"id": playback_id}}
         )
@@ -161,12 +162,16 @@ class FakeAri:
     async def stop_playback(self, playback_id):
         self.requests.append(("stop_playback", playback_id))
 
+    async def snoop(self, channel_id, snoop_id, *, spy="in", app_args=""):
+        self.requests.append(("snoop", channel_id, snoop_id, spy, app_args))
+        return {"id": snoop_id}
+
     async def stop_recording(self, name):
         self.requests.append(("stop_recording", name))
         self.bus.dispatch({"type": "RecordingFinished", "recording": {"name": name}})
 
     async def record(self, channel_id, name, **kwargs):
-        self.requests.append(("record", name, kwargs))
+        self.requests.append(("record", name, kwargs, channel_id))
         event = {"type": "RecordingFinished", "recording": {"name": name, "duration": 3}}
         event["recording"].update(self.recording_event or {"talking_duration": 2})
         asyncio.get_running_loop().call_soon(self.bus.dispatch, event)
@@ -221,8 +226,9 @@ async def test_ready_cue_starts_only_after_first_recording_is_active():
         ready_cue_media="sound:voice-monday/ready",
     )
     await channel.listen(max_seconds=10, max_silence_seconds=2)
-    assert [r[0] for r in ari.requests[:2]] == ["record", "play"]
-    assert ari.requests[1][1] == "sound:voice-monday/ready"
+    media_ops = [r for r in ari.requests if r[0] != "snoop"]
+    assert [r[0] for r in media_ops[:2]] == ["record", "play"]
+    assert media_ops[1][1] == "sound:voice-monday/ready"
     await channel.listen(max_seconds=10, max_silence_seconds=2)
     assert sum(r[0] == "play" for r in ari.requests) == 1
 
@@ -305,6 +311,77 @@ async def test_normal_playback_discards_inbound_capture():
     assert await channel.say("تمام") is True
     assert any(r[0] == "stop_recording" for r in ari.requests)
     assert channel._pending_audio is None
+
+
+async def test_caller_audio_is_recorded_on_a_snoop_channel_so_replies_can_play():
+    """A channel runs one media operation at a time: recording on the call channel
+    queued every reply until the recording ended (silent replies on real calls)."""
+    bus = AriEventBus()
+    ari = FakeAri(bus)
+    channel = AriCallChannel(ari=ari, bus=bus, channel={"id": "c6"}, speech=StaticRenderer())
+    await channel.prepare()
+    await channel.listen(max_seconds=10, max_silence_seconds=2)
+    assert await channel.say("تمام") is True
+    await channel.listen(max_seconds=10, max_silence_seconds=2)
+
+    snoops = [r for r in ari.requests if r[0] == "snoop"]
+    assert len(snoops) == 1  # one audio copy per call
+    _, spied, snoop_id, spy, app_args = snoops[0]
+    assert (spied, spy, app_args) == ("c6", "in", SNOOP_APP_ARG)
+    records = [r for r in ari.requests if r[0] == "record"]
+    assert len(records) == 3  # two utterances + the capture during the reply
+    assert {r[3] for r in records} == {snoop_id}
+    assert [r[2] for r in ari.requests if r[0] == "play"] == ["c6"]
+
+    await channel.release()
+    assert ("hangup", snoop_id) in ari.requests
+
+
+async def test_without_snoop_replies_are_never_blocked_by_a_capture():
+    class NoSnoopAri(FakeAri):
+        async def snoop(self, channel_id, snoop_id, **kwargs):
+            raise AriError("snoop not allowed", status=500)
+
+    bus = AriEventBus()
+    ari = NoSnoopAri(bus)
+    channel = AriCallChannel(ari=ari, bus=bus, channel={"id": "c7"}, speech=StaticRenderer())
+    await channel.prepare()
+    assert await channel.say("تمام") is True
+    assert not any(r[0] == "record" for r in ari.requests)  # no capture on the call channel
+    assert await channel.listen(max_seconds=10, max_silence_seconds=2)
+    assert [r[3] for r in ari.requests if r[0] == "record"] == ["c7"]
+
+
+async def test_lost_snoop_channel_is_recreated_once():
+    class FlakySnoopAri(FakeAri):
+        failed = False
+
+        async def record(self, channel_id, name, **kwargs):
+            if channel_id.startswith("vm-snoop-") and not self.failed:
+                self.failed = True
+                raise AriError("Channel not found", status=404)
+            await super().record(channel_id, name, **kwargs)
+
+    bus = AriEventBus()
+    ari = FlakySnoopAri(bus)
+    channel = AriCallChannel(ari=ari, bus=bus, channel={"id": "c8"}, speech=StaticRenderer())
+    assert await channel.listen(max_seconds=10, max_silence_seconds=2)
+    snoops = [r[2] for r in ari.requests if r[0] == "snoop"]
+    assert len(snoops) == 2
+    assert [r[3] for r in ari.requests if r[0] == "record"] == [snoops[1]]
+
+
+async def test_snoop_channel_entering_stasis_is_not_a_new_call():
+    calls = []
+    app = AriApplication(ari=None, speech=None, loop_factory=calls.append)
+    app.handle_event(
+        {
+            "type": "StasisStart",
+            "args": [SNOOP_APP_ARG],
+            "channel": {"id": "vm-snoop-1", "name": "Snoop/c6-00000001"},
+        }
+    )
+    assert app.sessions == {}
 
 
 async def test_ari_channel_does_not_beep_when_tts_fails():

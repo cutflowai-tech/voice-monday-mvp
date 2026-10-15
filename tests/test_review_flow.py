@@ -168,3 +168,25 @@ async def test_multiple_names_without_clear_separator_ask_or_extract(container):
     )
     assert reply.kind == "clarification"
     assert container.store.status_counts() == {}
+
+
+async def test_misheard_lmohamed_as_lhamad_is_still_reviewed_for_mohamed(container):
+    """Real call 2026-10-15: Whisper wrote «لحمد» for «لمحمد». The model chose Mohamed,
+    but the spoken-name guard rejected it because «حمد» was not one of his aliases."""
+
+    class ReviewAgent:
+        async def decide_review(self, text, current):
+            return ReviewDecision(
+                action="draft",
+                tasks=[ReviewTask(assignee_key="mohamed", task="ييجي المكتب بكرة")],
+                question=None,
+            )
+
+    container.engine.review_before_submit = True
+    container.engine.agent = ReviewAgent()
+    reply = await container.engine.handle(
+        ConversationState(), "أعايزك تحطي يتاسك لحمد إنه ييجي المكتب بكرة."
+    )
+    assert reply.kind == "review"
+    assert "محمد" in reply.text and "صح كده" in reply.text
+    assert container.store.status_counts() == {}

@@ -105,6 +105,22 @@ class AriClient:
             params={"media": media},
         )
 
+    async def snoop(
+        self, channel_id: str, snoop_id: str, *, spy: str = "in", app_args: str = ""
+    ) -> dict[str, Any]:
+        """Create a channel carrying a copy of ``channel_id``'s audio, placed in our app.
+
+        ``POST /channels/{channelId}/snoop/{snoopId}`` (Asterisk 12.2+). Recording on
+        the snoop channel leaves the original channel free for playback: a channel runs
+        one media operation at a time, so a recording there queues every playback.
+        """
+        response = await self._request(
+            "POST",
+            f"/channels/{quote(channel_id)}/snoop/{quote(snoop_id)}",
+            params={"app": self.app, "spy": spy, "appArgs": app_args},
+        )
+        return response.json() if response.content else {}
+
     async def stop_playback(self, playback_id: str) -> None:
         await self._request("DELETE", f"/playbacks/{quote(playback_id)}", ok_404=True)
 
