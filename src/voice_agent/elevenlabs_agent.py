@@ -33,68 +33,26 @@ import httpx
 
 from voice_agent.config import Settings
 from voice_agent.domain.people import PeopleDirectory, Person
+from voice_agent.sarah import (
+    ACK_HINTS,
+    DONE_HINTS,
+    FILLERS,
+    NAME_AR,
+    NAME_EN,
+    OPENINGS_ANONYMOUS,
+    UNKNOWN_CALLER,
+    build_prompt,
+)
 
 SECRET_NAME = "voice-monday-tool-bearer"  # noqa: S105 (a name, not a value)
 TOOL_SUBMIT = "submit_task"
 TOOL_CANCEL = "cancel_last"
-
-PROMPT = """\
-You are the female voice assistant on the office phone line. You speak ONLY Egyptian
-Arabic (Cairene), warm and very brief, always in female forms (هقول، حاضر، سجلت).
-Your only job is to put tasks for team members on Monday.
-
-People you can assign tasks to (use exactly these keys):
-{people}
-
-For every task:
-1. Reply with ONE short sentence that repeats the request, for example
-   «تمام، هقول لأحمد يجيب الكهربائي بكرة», then call submit_task with mode "new".
-2. When submit_task returns:
-   - "created": say «Done، خلاص حطيت التاسك» (you may vary it slightly), then «حاجة تانية؟»
-   - "queued": «بسجّلها دلوقتي، هتظهر على Monday كمان شوية.»
-   - "replaced": say nothing about that earlier task.
-   - "cancelled": say nothing (cancel_last already confirmed it).
-   - "created" together with "previous": "already_saved": the earlier task could not be
-     replaced because it was already saved: say «سجلت التعديل، بس الأولانية كانت اتسجلت
-     خلاص، امسحها من Monday لو مش محتاجها.»
-   - "invalid" with unknown_person: ask «التاسك دي لمين؟». Other "invalid": ask them to
-     say the task again briefly.
-   - "failed": «للأسف حصلت مشكلة ومقدرتش أسجلها، ممكن تقولها تاني؟»
-3. cancel_last returns:
-   - "cancelled": «تمام، لغيتها.»
-   - "already_saved": it was too late, the task is on Monday. Say «للأسف كانت اتسجلت خلاص،
-     امسحها من Monday لو مش محتاجها.» Never claim you cancelled it.
-   - "nothing_pending": nothing was saved, say «تمام، مش هسجلها.»
-4. If, right after your confirmation, the caller corrects you (another person, other
-   details, «لا قصدي ...»), call submit_task with mode "replace_last" and the full
-   corrected task. If they add another task, call submit_task with mode "new". If they
-   cancel («لا الغيها»، «بلاش»), call cancel_last.
-
-Rules:
-- Never say a task is saved before submit_task returns "created", and never say a task was
-  cancelled or changed unless the tool result says so.
-- Never guess or invent a person. If the name is unclear or not in the list, ask who.
-- The task text is the caller's own words in Egyptian Arabic, without the person's
-  name, keeping time words such as بكرة، بعد بكرة، يوم الخميس.
-- Do not ask for confirmation, and do not make small talk.
-- For anything other than tasks say «أنا بسجل تاسكات بس.»
-- When the caller says goodbye, answer «مع السلامة».
-"""
 
 
 def assignable_people(settings: Settings, directory: PeopleDirectory) -> list[Person]:
     """Only people with a Monday id can receive tasks, so only they are offered."""
     ids = settings.monday_person_ids()
     return [p for p in directory if p.key in ids]
-
-
-def build_prompt(people: list[Person]) -> str:
-    lines = []
-    for p in people:
-        aliases = [a for a in p.aliases if any("؀" <= ch <= "ۿ" for ch in a)]
-        also = f" (also: {'، '.join(aliases)})" if aliases else ""
-        lines.append(f"- {p.key}: {p.name_ar}{also}")
-    return PROMPT.format(people="\n".join(lines))
 
 
 def build_tools(settings: Settings, people: list[Person], secret_id: str) -> dict[str, dict]:
@@ -110,6 +68,9 @@ def build_tools(settings: Settings, people: list[Person], secret_id: str) -> dic
         ),
         "response_timeout_secs": 15,
         "pre_tool_speech": "force",
+        # a soft typing sound while the task is being saved (instead of dead air)
+        "tool_call_sound": "typing",
+        "tool_call_sound_behavior": "auto",
         "execution_mode": settings.elevenlabs_tool_execution_mode,
         "interruption_mode": "allow",
         "api_schema": {
@@ -172,27 +133,49 @@ def build_tools(settings: Settings, people: list[Person], secret_id: str) -> dic
 
 def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -> dict:
     return {
-        "name": "Voice Monday (Egyptian Arabic)",
-        "tags": ["voice-monday"],
+        "name": f"{NAME_EN} ({NAME_AR}) - Waset Co task line",
+        "tags": ["voice-monday", "sarah"],
         "conversation_config": {
             "agent": {
-                "first_message": "ألو",
+                # The bridge picks a different greeting per call (sarah.opening_for).
+                "first_message": "{{opening}}",
                 "language": "ar",
+                "dynamic_variables": {
+                    "dynamic_variable_placeholders": {
+                        "opening": OPENINGS_ANONYMOUS[0],
+                        "caller_name": UNKNOWN_CALLER,
+                        "caller_id": UNKNOWN_CALLER,
+                        "ack_hint": ACK_HINTS[0],
+                        "done_hint": DONE_HINTS[0],
+                    }
+                },
                 "prompt": {
                     "prompt": build_prompt(people),
                     "llm": settings.elevenlabs_agent_llm,
-                    "temperature": 0.2,
+                    # variety in wording; people and tool arguments stay constrained by enums
+                    "temperature": 0.6,
                     "tool_ids": tool_ids,
                 },
             },
             "tts": {
                 "model_id": settings.elevenlabs_agent_tts_model,
                 "voice_id": settings.elevenlabs_agent_voice_id,
+                "stability": 0.4,  # more expressive, less monotone
+                "similarity_boost": 0.8,
+                "speed": 1.05,
             },
             "turn": {
                 "turn_timeout": 7,
                 "turn_eagerness": "eager",
                 "speculative_turn": True,
+                # if the model is ever slow, a short human filler instead of silence
+                "soft_timeout_config": {
+                    "timeout_seconds": 1.5,
+                    "message": FILLERS[0],
+                    "additional_soft_timeout_messages": list(FILLERS[1:]),
+                    "randomize_fillers": True,
+                    "use_llm_generated_message": False,
+                },
             },
             "asr": {"provider": "scribe_realtime", "quality": "high"},
         },

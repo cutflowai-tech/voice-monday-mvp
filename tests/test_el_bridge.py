@@ -233,3 +233,33 @@ async def test_loud_caller_audio_marks_speech_for_the_conversation():
     await call._asterisk_to_agent(Sink())
     await asyncio.sleep(0)
     assert marks == ["conv_v"]
+
+
+def test_sarah_greets_known_callers_by_name_and_varies_it():
+    from voice_agent.domain.people import PeopleDirectory
+
+    people = PeopleDirectory.load()
+    bridge = ElevenLabsBridge(
+        api_key="k",
+        agent_id="a",
+        base_url="https://x",
+        host="127.0.0.1",
+        port=0,
+        identify=lambda n: people.get({"102": "ahmed", "105": "sara"}.get(n, "")),
+    )
+    known = bridge.initiation("102")
+    assert known["type"] == "conversation_initiation_client_data"
+    variables = known["dynamic_variables"]
+    assert variables["caller_id"] == "102" and variables["caller_name"] == "أحمد"
+    assert "أحمد" in variables["opening"]
+    openings = {bridge.initiation("102")["dynamic_variables"]["opening"] for _ in range(60)}
+    assert len(openings) >= 3  # not the same greeting every call
+    female = {bridge.initiation("105")["dynamic_variables"]["opening"] for _ in range(60)}
+    assert "ألو يا سارة، أؤمري." in female and "ألو يا سارة، أؤمر." not in female
+    styles = {
+        (v["ack_hint"], v["done_hint"])
+        for v in (bridge.initiation("102")["dynamic_variables"] for _ in range(60))
+    }
+    assert len(styles) >= 5  # each call nudges a different first wording
+    anonymous = bridge.initiation(None)["dynamic_variables"]
+    assert anonymous["caller_name"] == "unknown" and "سارة" in anonymous["opening"]

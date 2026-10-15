@@ -317,9 +317,19 @@ def cmd_el_bridge(args: argparse.Namespace, settings: Settings) -> int:
         import redis.asyncio as aioredis
 
         from voice_agent.agent_tools.activity import SpeechActivity
+        from voice_agent.domain.callers import CallerDirectory
+        from voice_agent.domain.people import PeopleDirectory
+
+        people = PeopleDirectory.load(settings.people_directory_file or None)
+        callers = CallerDirectory.load(settings.caller_directory_file, {p.key for p in people})
+
+        def identify(number: str):
+            key = callers.lookup(number)
+            return people.get(key) if key else None
 
         redis = aioredis.from_url(settings.redis_url, socket_timeout=0.5)
         bridge = ElevenLabsBridge(
+            identify=identify,
             api_key=settings.elevenlabs_api_key,
             agent_id=agent_id,
             base_url=settings.elevenlabs_base_url,

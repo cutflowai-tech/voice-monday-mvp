@@ -38,6 +38,7 @@ import httpx
 
 from voice_agent.agent_tools.activity import is_speech
 from voice_agent.logging_setup import get_logger
+from voice_agent.sarah import UNKNOWN_CALLER, opening_for, style_for_call
 
 log = get_logger(__name__)
 
@@ -308,8 +309,10 @@ class ElevenLabsBridge:
         host: str,
         port: int,
         activity=None,
+        identify=None,
     ):
         self.activity = activity  # SpeechActivity: lets the task window wait for the caller
+        self.identify = identify  # (caller number) -> Person | None, for Sarah's greeting
         self.api_key = api_key
         self.agent_id = agent_id
         self.base_url = base_url.rstrip("/")
@@ -369,15 +372,21 @@ class ElevenLabsBridge:
             signed_url_ms=round((t1 - t0) * 1000),
             connect_ms=round((time.monotonic() - t1) * 1000),
         )
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "conversation_initiation_client_data",
-                    "dynamic_variables": {"caller_id": caller or "unknown"},
-                }
-            )
-        )
+        await ws.send(json.dumps(self.initiation(caller)))
         return ws
+
+    def initiation(self, caller: str | None) -> dict[str, Any]:
+        """Who is calling, and a fresh greeting from Sarah for this call."""
+        person = self.identify(caller) if (self.identify and caller) else None
+        return {
+            "type": "conversation_initiation_client_data",
+            "dynamic_variables": {
+                "caller_id": caller or UNKNOWN_CALLER,
+                "caller_name": person.name_ar if person else UNKNOWN_CALLER,
+                "opening": opening_for(person),
+                **style_for_call(),
+            },
+        }
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()

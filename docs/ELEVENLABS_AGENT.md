@@ -36,6 +36,23 @@ Agent: تمام، هقول لأحمد يجيب الكهربائي بكرة
 Agent: Done، خلاص حطيت التاسك. حاجة تانية؟
 ```
 
+## Sarah
+
+The agent is **Sarah (سارة)**, the team's task-line assistant. Her identity lives in
+`src/voice_agent/sarah.py`:
+
+- **Persona prompt:** warm, quick, lightly playful Cairene Arabic in female forms. If asked,
+  she says she's the team's AI assistant.
+- **Greetings:** per call, the bridge picks a greeting by the caller's gender and name
+  from `config/callers.json` (e.g. «أهلاً يا أحمد، معاك سارة»).
+- **Wording:** a different suggested first acknowledgment and confirmation for each call,
+  so calls don't all sound the same.
+- **Fillers:** randomized («لحظة…»، «ثواني بس…») while a task saves. A soft typing sound
+  plays during the save.
+- **Voice:** a built-in voice on the free plan (`ELEVENLABS_AGENT_VOICE_ID`, default
+  "Sarah" `EXAVITQu4vr4xnSDxMaL`), at stability 0.4 and speed 1.05.
+- **Temperature:** 0.6 for variety; people and tool arguments are still fixed by enums.
+
 ## Who does what
 
 **ElevenLabs** handles:
@@ -117,7 +134,7 @@ Per-turn latency is visible in the ElevenLabs conversation history; our side log
 |---|---|---|
 | `turn.turn_eagerness` | `eager` | Answers sooner after you stop talking |
 | `turn.speculative_turn` | `true` | Starts thinking during the pause (more LLM cost) |
-| `ELEVENLABS_AGENT_LLM` | `gemini-2.5-flash-lite` | Measured 2026-10-15: ack 0.92 s after you stop (2.5-flash: 2.15 s; 4.6 s before «Done») |
+| `ELEVENLABS_AGENT_LLM` | `qwen3-30b-a3b` | Hosted by ElevenLabs. Measured on live calls 2026-10-15: ack 0.8–1.35 s after you stop, «Done» LLM 0.15 s. gemini-2.5-flash-lite: 1.0–1.5 s / 0.3–0.4 s; gemini-3.x-flash-lite add `[happy]` tags and are slower |
 | `ELEVENLABS_AGENT_TTS_MODEL` | `eleven_v4_turbo` | Lowest-latency voice model |
 | `ELEVENLABS_TOOL_EXECUTION_MODE` | `post_tool_speech` | Window starts after her acknowledgment; `immediate` starts it while she speaks |
 

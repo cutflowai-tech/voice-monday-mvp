@@ -79,18 +79,27 @@ async def test_first_sync_creates_everything_with_documented_shapes(el_settings,
     assert props["caller_id"]["dynamic_variable"] == "caller_id"  # set by the AudioSocket bridge
     assert props["assignee_key"]["enum"] == ["mohamed", "ahmed"]  # only people with Monday ids
     assert submit["pre_tool_speech"] == "force"
+    assert submit["tool_call_sound"] == "typing"
     assert 5 <= submit["response_timeout_secs"] <= 300
 
     agent_body = by_path[("POST", "/v1/convai/agents/create")]
     assert agent_body["platform_settings"]["auth"]["enable_auth"] is True  # signed URLs only
     agent = agent_body["conversation_config"]
-    assert agent["agent"]["first_message"] == "ألو"
+    assert agent["agent"]["first_message"] == "{{opening}}"
+    placeholders = agent["agent"]["dynamic_variables"]["dynamic_variable_placeholders"]
+    assert set(placeholders) == {"opening", "caller_name", "caller_id", "ack_hint", "done_hint"}
+    assert "{{ack_hint}}" in agent["agent"]["prompt"]["prompt"]
+    fillers = agent["turn"]["soft_timeout_config"]
+    assert fillers["randomize_fillers"] and fillers["additional_soft_timeout_messages"]
     assert agent["agent"]["language"] == "ar"
     assert agent["agent"]["prompt"]["tool_ids"] == ["tool_2", "tool_3"]
-    assert "mohamed: محمد" in agent["agent"]["prompt"]["prompt"]
+    assert "mohamed: محمد (male" in agent["agent"]["prompt"]["prompt"]
+    assert "Sarah (سارة)" in agent["agent"]["prompt"]["prompt"]
     prompt = agent["agent"]["prompt"]["prompt"]
     assert "karim" not in prompt
-    assert '"already_saved"' in prompt and "Never claim you cancelled it" in prompt
+    assert '"already_saved"' in prompt
+    assert "Never say a task is saved, cancelled or changed unless the tool result" in prompt
+    assert "{{caller_name}}" in prompt and "{people}" not in prompt
     assert agent["tts"]["voice_id"] == "I3u6waC588j43py1kDN2"
     assert agent["turn"]["turn_eagerness"] == "eager"
 
