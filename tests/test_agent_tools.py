@@ -43,7 +43,7 @@ async def test_task_is_created_after_the_window_and_reported_done(window, worker
         )
     assert result["status"] == "created"
     assert result["assignee"] == "أحمد"
-    assert [c["title"] for c in mock_monday.calls] == ["يجيب الكهربائي بكرة"]
+    assert [c["title"] for c in mock_monday.calls] == ["هات الكهربائي بكرة"]  # instruction
     assert mock_monday.calls[0]["person_id"] == 222
 
 
@@ -84,7 +84,7 @@ async def test_extra_request_within_window_adds_a_task(window, worker, mock_mond
         )
         assert (await first)["status"] == "created"
     assert second["status"] == "created"
-    assert sorted(c["title"] for c in mock_monday.calls) == ["يجيب الكهربائي", "يشتري كاميرا"]
+    assert sorted(c["title"] for c in mock_monday.calls) == ["اشتري كاميرا", "هات الكهربائي"]
 
 
 async def test_cancel_within_window_saves_nothing(window, container):
@@ -254,3 +254,40 @@ async def test_hold_is_bounded(container):
     result = await window.submit(conversation_id="conv_b", assignee_key="ahmed", task="مهمة")
     assert result["status"] in {"queued", "created"}
     assert asyncio.get_running_loop().time() - started < 1.0
+
+
+async def test_monday_title_is_the_cleaned_instruction(container, worker, mock_monday):
+    container.callers._mappings["101"] = "mohamed"
+    window = TaskWindow(container, grace_seconds=0.01, done_wait_seconds=1.0, poll_seconds=0.01)
+    async with running_worker(worker):
+        result = await window.submit(
+            conversation_id="conv_t1",
+            assignee_key="ahmed",
+            task="يتصل بيا ويجيب الورق",
+            caller_id="101",
+        )
+    assert result["status"] == "created" and result["task"] == "اتصل بمحمد وهات الورق"
+    assert mock_monday.calls[-1]["title"] == "اتصل بمحمد وهات الورق"
+    job = container.store.get(result["job_id"])
+    assert job.transcript == "يتصل بيا ويجيب الورق"  # the caller's words are kept
+
+
+async def test_saving_flag_spans_the_whole_save(container):
+    events = []
+
+    class Recorder:
+        async def seconds_since_speech(self, conversation_id):
+            return None
+
+        async def set_saving(self, conversation_id, on):
+            events.append(on)
+
+    window = TaskWindow(
+        container,
+        grace_seconds=0.01,
+        done_wait_seconds=0.05,
+        poll_seconds=0.01,
+        activity=Recorder(),
+    )
+    await window.submit(conversation_id="conv_s", assignee_key="ahmed", task="مهمة")
+    assert events == [True, False]

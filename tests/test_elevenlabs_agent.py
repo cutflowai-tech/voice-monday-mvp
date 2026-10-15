@@ -79,7 +79,7 @@ async def test_first_sync_creates_everything_with_documented_shapes(el_settings,
     assert props["caller_id"]["dynamic_variable"] == "caller_id"  # set by the AudioSocket bridge
     assert props["assignee_key"]["enum"] == ["mohamed", "ahmed"]  # only people with Monday ids
     assert submit["pre_tool_speech"] == "force"
-    assert submit["tool_call_sound"] == "typing"
+    assert submit["tool_call_sound"] is None  # the bridge plays its own keyboard sound
     assert 5 <= submit["response_timeout_secs"] <= 300
 
     agent_body = by_path[("POST", "/v1/convai/agents/create")]

@@ -69,9 +69,8 @@ def build_tools(settings: Settings, people: list[Person], secret_id: str) -> dic
         ),
         "response_timeout_secs": 15,
         "pre_tool_speech": "force",
-        # a soft typing sound while the task is being saved (instead of dead air)
-        "tool_call_sound": "typing",
-        "tool_call_sound_behavior": "auto",
+        # no platform sound: the bridge plays its own, louder keyboard while saving
+        "tool_call_sound": None,
         "execution_mode": settings.elevenlabs_tool_execution_mode,
         "interruption_mode": "allow",
         "api_schema": {
@@ -93,8 +92,10 @@ def build_tools(settings: Settings, people: list[Person], secret_id: str) -> dic
                     "task": {
                         "type": "string",
                         "description": (
-                            "The task in the caller's Egyptian Arabic words, without the "
-                            "person's name, keeping time words like بكرة."
+                            "Short instruction TO the assignee in Egyptian imperative, "
+                            "without their name, keeping time words: «اشتري كاميرات بكرة», "
+                            "«هات الكهربائي بكرة». The caller's «بيا/ليا» becomes the "
+                            "caller's name; «بيكي/ليكي» (said to you) becomes «سارة»."
                         ),
                     },
                     "mode": {

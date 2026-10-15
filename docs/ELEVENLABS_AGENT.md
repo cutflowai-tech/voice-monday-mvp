@@ -60,6 +60,15 @@ The agent is **Sarah (سارة)**, the team's task-line assistant. Her identity 
 - **Personality:** punctuation for natural rhythm, Egyptian reactions («يا سلام!»،
   «معلش»), a little chat and at most one light joke per call, never slowing a task.
 - **Recognition:** the team's names are sent to speech recognition as `asr.keywords`.
+- **Task titles:** Monday titles are instructions to the assignee, cleaned on the server by
+  `agent_tools/task_text.py` even if the model slips: «يشتري كاميرات بكرة» → «اشتري كاميرات
+  بكرة»; «يتصل بيا» → «اتصل بـ<caller>»; «يتصل بيكي» → «اتصل بسارة». When repeating a task,
+  Sarah flips the point of view («يتصل بيكي» → «هخلّيه يتصل بيا»). The caller's original
+  words stay in the job transcript.
+- **Keyboard sound:** while a task is saving, the bridge plays its own typing loop
+  (`assets/typing_16k.pcm`, made with ElevenLabs sound effects). It's louder than the
+  platform's tool sound and drops under her voice when she speaks. Set the level with
+  `EL_BRIDGE_TYPING_VOLUME` (0 = off, 1 = normal, up to 3).
 - **Temperature:** 0.6 for variety; people and tool arguments are still fixed by enums.
 
 ## Who does what

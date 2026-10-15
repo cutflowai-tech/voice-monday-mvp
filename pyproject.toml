@@ -35,7 +35,7 @@ voice-agent = "voice_agent.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-voice_agent = ["py.typed", "people.json"]
+voice_agent = ["py.typed", "people.json", "assets/*.pcm"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

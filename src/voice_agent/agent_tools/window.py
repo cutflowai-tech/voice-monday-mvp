@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from voice_agent.agent_tools.task_text import normalize_task
 from voice_agent.container import Container
 from voice_agent.domain.intents import Action, Intent, IntentDetails
 from voice_agent.jobs.models import JobStatus
@@ -48,6 +49,7 @@ class Draft:
 @dataclass
 class Conversation:
     drafts: list[Draft] = field(default_factory=list)
+    inflight: int = 0  # drafts waiting or being saved (drives the typing sound)
     last_seen: float = field(default_factory=time.monotonic)
 
 
@@ -121,6 +123,8 @@ class TaskWindow:
             mode=mode,
             assignee_key=assignee_key,
         )
+        conv.inflight += 1
+        await self._signal_saving(conversation_id, True)
         runner = asyncio.create_task(self._run(conversation_id, draft), name=f"draft-{key}")
         self._tasks.add(runner)
         runner.add_done_callback(self._tasks.discard)
@@ -192,6 +196,16 @@ class TaskWindow:
             log.exception("agent_tool.commit_failed", conversation_id=conversation_id)
             if not draft.result.done():
                 draft.result.set_result({"status": "failed", "problem": repr(exc)})
+        finally:
+            conv = self._conversations.get(conversation_id)
+            if conv is not None:
+                conv.inflight = max(0, conv.inflight - 1)
+                if conv.inflight == 0:
+                    await self._signal_saving(conversation_id, False)
+
+    async def _signal_saving(self, conversation_id: str, on: bool) -> None:
+        if self.activity is not None and hasattr(self.activity, "set_saving"):
+            await self.activity.set_saving(conversation_id, on)
 
     async def _hold_while_caller_speaks(self, conversation_id: str, draft: Draft) -> None:
         """A correction only arrives after the caller stops talking and the agent reacts:
@@ -213,8 +227,18 @@ class TaskWindow:
     async def _commit(self, conversation_id: str, draft: Draft) -> dict[str, Any]:
         handler = self.c.commands.get(Action.CREATE_TASK)
         assert handler is not None
-        intent = self._intent(draft.assignee_key, draft.task)
         requester_key = self.c.callers.lookup(draft.caller_id) if draft.caller_id else None
+        requester = self.c.directory.get(requester_key) if requester_key else None
+        assignee = self.c.directory.get(draft.assignee_key)
+        assert assignee is not None
+        # «يشتري كاميرات» -> «اشتري كاميرات»; «يتصل بيا» -> «اتصل بمحمد»
+        title = normalize_task(
+            draft.task,
+            assignee_names=(assignee.name_ar, assignee.name_en, *assignee.aliases),
+            assignee_female=assignee.gender == "f",
+            caller_name=requester.name_ar if requester else None,
+        )
+        intent = self._intent(draft.assignee_key, title)
         spec = handler.build_job(intent)
         spec.payload["requester_key"] = requester_key
         metadata = intent.public_dict()
@@ -223,7 +247,7 @@ class TaskWindow:
         job, _ = await self.c.jobs.submit(
             spec,
             idempotency_key=draft.key,
-            transcript=draft.task,
+            transcript=draft.task,  # the caller's words as the agent heard them
             intent=metadata,
             session_id=conversation_id,
             call_id=conversation_id,
@@ -231,7 +255,7 @@ class TaskWindow:
         log.info("agent_tool.committed", conversation_id=conversation_id, job_id=job.id)
         job = await self._wait_for_result(job.id) or job
         person = self.c.directory.get(draft.assignee_key)
-        base = {"assignee": person.name_ar if person else draft.assignee_key, "task": draft.task}
+        base = {"assignee": person.name_ar if person else draft.assignee_key, "task": title}
         if job.status is JobStatus.COMPLETED:
             status = "created"
         elif job.status in (JobStatus.FAILED, JobStatus.DEAD_LETTER):

@@ -50,6 +50,27 @@ class SpeechActivity:
             return None
         return max(0.0, time.time() - float(value))
 
+    # -------------------------------------------------- "saving now" (typing sound)
+    def _saving_key(self, conversation_id: str) -> str:
+        return f"{self.ns}:saving:{conversation_id}"
+
+    async def set_saving(self, conversation_id: str, on: bool) -> None:
+        try:
+            if on:
+                await self.redis.set(self._saving_key(conversation_id), "1", px=30000)
+            else:
+                await self.redis.delete(self._saving_key(conversation_id))
+        except Exception as exc:
+            if not self._warned:
+                self._warned = True
+                log.warning("speech_activity.unavailable", error=repr(exc))
+
+    async def is_saving(self, conversation_id: str) -> bool:
+        try:
+            return bool(await self.redis.exists(self._saving_key(conversation_id)))
+        except Exception:
+            return False
+
     def forget(self, conversation_id: str) -> None:
         self._last_mark.pop(conversation_id, None)
 

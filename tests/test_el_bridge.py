@@ -274,3 +274,24 @@ async def test_late_pong_on_a_closed_socket_is_silent():
             raise ConnectionError("closed")
 
     await BridgeCall._pong(Closed(), {"type": "ping", "ping_event": {"event_id": 1}})
+
+
+async def test_typing_plays_only_while_saving_and_ducks_under_her_voice():
+    from voice_agent.telephony.el_bridge import mix, typing_loop
+
+    loop = typing_loop(8000)
+    assert len(loop) > 8000 and any(loop)
+    quiet, _ = mix(bytes(320), loop, 0, 1.0)
+    assert quiet != bytes(320)  # keyboard audible on its own
+
+    call = BridgeCall(asyncio.StreamReader(), FakeWriter(), open_agent=None, typing_volume=1.0)
+    call.connecting = False
+    call.saving = True
+    pacer = asyncio.create_task(call._pace_playback())
+    await asyncio.sleep(0.1)
+    call.saving = False
+    await asyncio.sleep(0.1)
+    pacer.cancel()
+    frames = [p for kind, p in call.writer.frames() if kind == 0x10]
+    assert any(p != bytes(320) for p in frames[:3])  # typing while saving
+    assert all(p == bytes(320) for p in frames[-2:])  # silence afterwards

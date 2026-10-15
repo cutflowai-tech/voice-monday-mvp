@@ -330,6 +330,7 @@ def cmd_el_bridge(args: argparse.Namespace, settings: Settings) -> int:
         redis = aioredis.from_url(settings.redis_url, socket_timeout=0.5)
         bridge = ElevenLabsBridge(
             identify=identify,
+            typing_volume=settings.el_bridge_typing_volume,
             api_key=settings.elevenlabs_api_key,
             agent_id=agent_id,
             base_url=settings.elevenlabs_base_url,

@@ -143,6 +143,8 @@ class Settings(BaseSettings):
     # AudioSocket bridge (extension 778 -> 127.0.0.1:9019 -> ElevenLabs WebSocket)
     el_bridge_host: str = "127.0.0.1"
     el_bridge_port: int = Field(default=9019, ge=1, le=65535)
+    # keyboard typing while a task is saved: 0 = off, 1 = normal, 2 = loud
+    el_bridge_typing_volume: float = Field(default=1.0, ge=0, le=3)
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "json"
 

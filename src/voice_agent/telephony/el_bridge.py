@@ -65,6 +65,37 @@ RINGBACK_ON_S = 2.0
 RINGBACK_PERIOD_S = 3.0
 RINGBACK_AMPLITUDE = 4000
 SIGNED_URL_MAX_AGE_S = 60.0
+# Keyboard typing played while a task is being saved (louder than ElevenLabs' own
+# tool sound, which has no volume setting). Ducked under Sarah's voice when she talks.
+TYPING_TARGET_RMS = 2200  # at volume 1.0; phone speech is roughly 3000-5000
+TYPING_UNDER_VOICE = 0.35
+_TYPING: dict[int, array] = {}
+
+
+def typing_loop(rate: int) -> array:
+    """The packaged 16 kHz typing loop, resampled to ``rate`` and normalised (cached)."""
+    if rate not in _TYPING:
+        from importlib import resources
+
+        raw = resources.files("voice_agent").joinpath("assets/typing_16k.pcm").read_bytes()
+        pcm = resample(raw, 16000, rate)
+        samples = array("h")
+        samples.frombytes(pcm)
+        rms = math.sqrt(sum(v * v for v in samples) / max(1, len(samples))) or 1.0
+        gain = TYPING_TARGET_RMS / rms
+        _TYPING[rate] = array("h", (max(-32768, min(32767, int(v * gain))) for v in samples))
+    return _TYPING[rate]
+
+
+def mix(voice: bytes, effect: array, start: int, effect_gain: float) -> tuple[bytes, int]:
+    """Add the looping effect under ``voice`` (16-bit PCM); returns frame and next index."""
+    out = array("h")
+    out.frombytes(voice)
+    n = len(effect)
+    for i in range(len(out)):
+        v = out[i] + int(effect[(start + i) % n] * effect_gain)
+        out[i] = 32767 if v > 32767 else (-32768 if v < -32768 else v)
+    return out.tobytes(), (start + len(out)) % n
 
 
 # ------------------------------------------------------------------ audio helpers
@@ -135,7 +166,13 @@ class BridgeCall:
         *,
         open_agent,
         on_speech=None,
+        is_saving=None,
+        typing_volume: float = 1.0,
     ):
+        self.is_saving = is_saving  # async (conversation_id) -> bool, from the task window
+        self.typing_volume = typing_volume
+        self.saving = False
+        self._typing_pos = 0
         self.reader = reader
         self.on_speech = on_speech  # async (conversation_id) -> None, e.g. SpeechActivity.mark
         self.writer = writer
@@ -180,6 +217,8 @@ class BridgeCall:
                 asyncio.create_task(self._agent_to_asterisk(ws)),
                 pacer,
             ]
+            if self.is_saving and self.typing_volume > 0:
+                tasks.append(asyncio.create_task(self._watch_saving()))
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
@@ -278,6 +317,20 @@ class BridgeCall:
             elif len(self.out_buffer) >= size:
                 chunk = bytes(self.out_buffer[:size])
                 del self.out_buffer[:size]
+                if self.saving:
+                    chunk, self._typing_pos = mix(
+                        chunk,
+                        typing_loop(self.asterisk_rate),
+                        self._typing_pos,
+                        self.typing_volume * TYPING_UNDER_VOICE,
+                    )
+            elif self.saving:
+                chunk, self._typing_pos = mix(
+                    bytes(size),
+                    typing_loop(self.asterisk_rate),
+                    self._typing_pos,
+                    self.typing_volume,
+                )
             else:
                 chunk = bytes(size)  # silence keeps the AudioSocket alive between words
             self.writer.write(frame(self.asterisk_kind, chunk))
@@ -288,6 +341,13 @@ class BridgeCall:
                 next_at = time.monotonic()
                 delay = 0
             await asyncio.sleep(max(0.0, delay))
+
+    async def _watch_saving(self) -> None:
+        """Follow the task window's "saving now" flag for this conversation."""
+        while True:
+            if self.conversation_id:
+                self.saving = await self.is_saving(self.conversation_id)
+            await asyncio.sleep(0.15)
 
     @staticmethod
     async def _pong(ws, message: dict[str, Any]) -> None:
@@ -312,7 +372,9 @@ class ElevenLabsBridge:
         port: int,
         activity=None,
         identify=None,
+        typing_volume: float = 1.0,
     ):
+        self.typing_volume = typing_volume
         self.activity = activity  # SpeechActivity: lets the task window wait for the caller
         self.identify = identify  # (caller number) -> Person | None, for Sarah's greeting
         self.api_key = api_key
@@ -401,6 +463,8 @@ class ElevenLabsBridge:
                 writer,
                 open_agent=self.open_agent,
                 on_speech=self.activity.mark if self.activity else None,
+                is_saving=self.activity.is_saving if self.activity else None,
+                typing_volume=self.typing_volume,
             ).run()
         except Exception as exc:
             log.warning("el_bridge.call_failed", error=repr(exc))
