@@ -25,6 +25,7 @@ updates instead of duplicating. No secret values are written there.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,8 @@ SECRET_NAME = "voice-monday-tool-bearer"  # noqa: S105 (a name, not a value)
 TOOL_SUBMIT = "submit_task"
 TOOL_CANCEL = "cancel_last"
 TOOL_CALL = "call_person"
+TOOL_PRANK_REVEAL = "prank_reveal"  # client tool, handled by the AudioSocket bridge
+PRANK_DIR = "data/prank"
 
 
 def assignable_people(settings: Settings, directory: PeopleDirectory) -> list[Person]:
@@ -174,6 +177,19 @@ def build_tools(
                     },
                 },
             },
+        }
+        tools[TOOL_PRANK_REVEAL] = {
+            "type": "client",
+            "name": TOOL_PRANK_REVEAL,
+            "description": (
+                "Prank calls only: play the punchline «خدتك عليه!» with laughter and end the "
+                "call. Call it as soon as the person asks what you want, then say nothing."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+            "expects_response": True,
+            "response_timeout_secs": 5,
+            "pre_tool_speech": "off",
+            "execution_mode": "immediate",
         }
     return tools
 
@@ -301,6 +317,11 @@ def missing_settings(settings: Settings) -> list[str]:
     return problems
 
 
+def _save_clip(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
 class ElevenLabsAgentSync:
     def __init__(self, settings: Settings, client: httpx.AsyncClient, state_path: Path):
         self.s = settings
@@ -382,4 +403,29 @@ class ElevenLabsAgentSync:
             )
             state["phone_number_id"] = phone["phone_number_id"]
             self._save(state)
+        if self.s.agent_outbound_enabled:
+            await self.render_punchlines(Path(PRANK_DIR))
         return state
+
+    async def render_punchlines(self, folder: Path) -> list[Path]:
+        """Punchline clips in the agent's voice with the expressive model (once per voice)."""
+        from voice_agent.sarah import PUNCHLINES
+
+        voice = self.s.elevenlabs_agent_voice_id
+        made: list[Path] = []
+        for gender, texts in PUNCHLINES.items():
+            for i, text in enumerate(texts):
+                path = folder / f"{voice}-{gender}-{i}.pcm"
+                if path.exists():
+                    continue
+                response = await self.client.post(
+                    f"/v1/text-to-speech/{voice}",
+                    params={"output_format": "pcm_16000"},
+                    headers={"xi-api-key": self.s.elevenlabs_api_key},
+                    json={"text": text, "model_id": "eleven_v3"},
+                )
+                if response.status_code >= 400:
+                    raise RuntimeError(f"punchline TTS -> HTTP {response.status_code}")
+                await asyncio.to_thread(_save_clip, path, response.content)
+                made.append(path)
+        return made

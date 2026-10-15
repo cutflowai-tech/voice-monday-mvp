@@ -85,10 +85,18 @@ On a normal call you can ask «اتصلي بأحمد واعملي فيه مقل�
 2. The bridge's dialer rings `PJSIP/<extension>` through ARI on 127.0.0.1, showing caller ID
    `AGENT_OUTBOUND_CALLER_ID` ("Sarah <777>").
 3. When it's answered, the dialplan connects the call to the bridge, which starts Sarah in
-   **prank mode**: «ألو يا أحمد، عايزاك في حاجة مهمة.». When the person asks
-   «عايزاني في إيه؟», she says «خدتك عليه!» and «ده مقلب من <requester>», says goodbye and
-   hangs up with the `end_call` tool. If the person sounds busy or upset, she reveals the
-   joke straight away. A prank call lasts at most 90 s.
+   **prank mode**: «ألو يا أحمد، عايزاك في حاجة مهمة.». When the person asks what she wants,
+   she calls the **client tool `prank_reveal`**, which the bridge handles itself:
+   - it mutes her and plays a pre-rendered punchline in her voice: «خَدتَك عليه!» (or
+     «خَدتِك» to a woman) followed by hard laughter;
+   - it hangs up when the laughter ends.
+
+   She never says who asked for the prank. If the person sounds busy or upset, she says
+   it was a joke and apologises. A prank call lasts at most 90 s.
+
+   The clips live in `data/prank/<voice>-<m|f>-<n>.pcm`. `el-agent sync` renders them once
+   per voice with `eleven_v3`, because the fast model can't laugh. The vowel is marked on
+   purpose: without it the voice read «خدتِك».
 
 Turn it on with `AGENT_OUTBOUND_ENABLED=true`. Then re-run `scripts/pbx-elevenlabs-route.sh
 apply`, which enables HTTP on loopback, adds the ARI user from `ASTERISK_ARI_USERNAME` /

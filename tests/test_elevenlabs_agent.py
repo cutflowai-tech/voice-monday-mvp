@@ -181,3 +181,34 @@ def test_call_person_tool_only_when_outbound_is_on(el_settings):
         p.key for p in people[:3]
     ]
     assert schema["request_body_schema"]["properties"]["purpose"]["enum"] == ["prank"]
+    reveal = tools["prank_reveal"]
+    assert reveal["type"] == "client" and reveal["expects_response"] is True
+    assert reveal["pre_tool_speech"] == "off"
+
+
+def test_prank_prompt_never_names_the_requester():
+    from voice_agent.sarah import PUNCHLINES, build_prompt
+
+    prompt = build_prompt(list(PeopleDirectory.load())[:1], expressive=False)
+    assert "prank_reveal" in prompt and "Never say who asked for the prank" in prompt
+    assert "مقلب من" not in prompt
+    assert all("خَدتَك" in t for t in PUNCHLINES["m"])  # fatha: said to a man
+    assert all("خَدتِك" in t for t in PUNCHLINES["f"])
+
+
+async def test_sync_renders_punchline_clips_once(el_settings, tmp_path):
+    el_settings.agent_outbound_enabled = True
+    posts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posts.append(request.url.path)
+        return httpx.Response(200, content=b"\x00\x00" * 800)
+
+    async with httpx.AsyncClient(
+        base_url="https://api.elevenlabs.io", transport=httpx.MockTransport(handler)
+    ) as client:
+        sync = ElevenLabsAgentSync(el_settings, client, tmp_path / "state.json")
+        first = await sync.render_punchlines(tmp_path / "prank")
+        second = await sync.render_punchlines(tmp_path / "prank")
+    assert len(first) == 4 and second == []
+    assert all(p.startswith("/v1/text-to-speech/") for p in posts)

@@ -142,3 +142,75 @@ def test_call_person_endpoint_requires_the_secret_and_the_feature(container):
         headers = {"Authorization": "Bearer " + "s" * 40}
         reply = client.post("/agent/tools/call_person", json=body, headers=headers)
         assert reply.json() == {"status": "unavailable"}  # outbound not enabled
+
+
+class Socket:
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, data):
+        import json
+
+        self.sent.append(json.loads(data))
+
+
+async def test_prank_reveal_plays_the_clip_mutes_and_ends_the_call():
+    import asyncio
+
+    from voice_agent.telephony.el_bridge import BridgeCall
+
+    from .test_el_bridge import FakeWriter
+
+    call = BridgeCall(asyncio.StreamReader(), FakeWriter(), open_agent=None)
+    call.punchline = bytes(640)  # 20 ms at 16 kHz
+    ws = Socket()
+    pacer = asyncio.create_task(call._pace_playback())
+    call.connecting = False
+    ended = await call._client_tool(
+        ws, {"tool_name": "prank_reveal", "tool_call_id": "t1", "expects_response": True}
+    )
+    pacer.cancel()
+    assert ended and call.muted
+    assert ws.sent == [
+        {"type": "client_tool_result", "tool_call_id": "t1", "result": "played", "is_error": False}
+    ]
+
+
+async def test_prank_reveal_without_a_clip_lets_her_say_it():
+    import asyncio
+
+    from voice_agent.telephony.el_bridge import BridgeCall
+
+    from .test_el_bridge import FakeWriter
+
+    call = BridgeCall(asyncio.StreamReader(), FakeWriter(), open_agent=None)
+    ws = Socket()
+    ended = await call._client_tool(
+        ws, {"tool_name": "prank_reveal", "tool_call_id": "t2", "expects_response": True}
+    )
+    assert not ended and not call.muted
+    assert ws.sent[0]["result"] == "unavailable"
+    await call._client_tool(ws, {"tool_name": "x", "tool_call_id": "t3", "expects_response": True})
+    assert ws.sent[1]["is_error"] is True
+
+
+async def test_prank_call_gets_a_clip_for_the_targets_gender(people, tmp_path):
+    (tmp_path / "VOICE-m-0.pcm").write_bytes(b"m" * 64)
+    (tmp_path / "VOICE-f-0.pcm").write_bytes(b"f" * 64)
+    bridge = ElevenLabsBridge(
+        api_key="k",
+        agent_id="a",
+        base_url="https://x",
+        host="127.0.0.1",
+        port=0,
+        ari=FakeAri(),
+        people=people,
+        outbound=object(),
+        punchline_dir=str(tmp_path),
+        voice_id="VOICE",
+    )
+    await bridge.place_call(OutboundRequest("ahmed", "102", "prank", "mohamed", time.time()))
+    call_uuid = uuid.UUID(bridge.ari.calls[0]["variables"]["VM_UUID"]).bytes
+    bridge.initiation(None, call_uuid)
+    assert bridge.punchline_for(call_uuid) == b"m" * 64
+    assert bridge.punchline_for(call_uuid) is None  # used once

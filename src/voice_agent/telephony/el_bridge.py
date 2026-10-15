@@ -178,8 +178,12 @@ class BridgeCall:
         is_saving=None,
         typing_volume: float = 1.0,
         limit_for=None,
+        punchline_for=None,
     ):
         self.limit_for = limit_for  # (uuid bytes) -> max seconds for this call, or None
+        self.punchline_for = punchline_for  # (uuid bytes) -> 16 kHz PCM clip, or None
+        self.punchline: bytes | None = None
+        self.muted = False  # after the punchline starts, the agent's own audio is dropped
         self.call_uuid: bytes | None = None
         self.is_saving = is_saving  # async (conversation_id) -> bool, from the task window
         self.typing_volume = typing_volume
@@ -218,6 +222,8 @@ class BridgeCall:
         ws = None
         try:
             ws = await self.open_agent(self.caller, payload)
+            if self.punchline_for:
+                self.punchline = self.punchline_for(payload)
             await self._await_metadata(ws)
             self.connecting = False
             log.info(
@@ -299,7 +305,13 @@ class BridgeCall:
         async for raw in ws:
             message = json.loads(raw)
             kind = message.get("type")
+            if kind == "client_tool_call":
+                if await self._client_tool(ws, message.get("client_tool_call") or {}):
+                    return  # punchline played: end the call
+                continue
             if kind == "audio":
+                if self.muted:
+                    continue
                 pcm = base64.b64decode(message["audio_event"]["audio_base_64"])
                 if self._user_spoke_at is not None:
                     log.info(
@@ -360,6 +372,40 @@ class BridgeCall:
                 delay = 0
             await asyncio.sleep(max(0.0, delay))
 
+    async def _client_tool(self, ws, call: dict[str, Any]) -> bool:
+        """Client tools run here, in the bridge. Returns True when the call should end."""
+        name = call.get("tool_name")
+        played = False
+        clip_seconds = 0.0
+        if name == "prank_reveal" and self.punchline:
+            self.muted = True
+            clip = resample(self.punchline, 16000, self.asterisk_rate)
+            self.out_buffer[:] = clip
+            clip_seconds = len(clip) / (2 * self.asterisk_rate)
+            played = True
+            result = "played"
+        elif name == "prank_reveal":
+            result = "unavailable"
+        else:
+            result = f"unknown client tool {name!r}"
+        if call.get("expects_response"):
+            with contextlib.suppress(Exception):
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "client_tool_result",
+                            "tool_call_id": call.get("tool_call_id"),
+                            "result": result,
+                            "is_error": result.startswith("unknown"),
+                        }
+                    )
+                )
+        if not played:
+            return False
+        log.info("el_bridge.punchline", conversation_id=self.conversation_id)
+        await asyncio.sleep(clip_seconds + 0.4)  # let the laughter finish before hanging up
+        return True
+
     async def _watch_saving(self) -> None:
         """Follow the task window's "saving now" flag for this conversation."""
         while True:
@@ -395,7 +441,12 @@ class ElevenLabsBridge:
         ari=None,
         people=None,
         outbound_caller_id: str = "Sarah <777>",
+        punchline_dir: str | None = None,
+        voice_id: str = "",
     ):
+        self.punchline_dir = punchline_dir
+        self.voice_id = voice_id
+        self.punchlines: dict[bytes, bytes] = {}
         self.typing_volume = typing_volume
         self.outbound = outbound  # OutboundCalls: queued call requests from the API
         self.ari = ari  # AriClient on loopback, used to place those calls
@@ -475,6 +526,9 @@ class ElevenLabsBridge:
             requester = self.people.get(request.requested_by) if request.requested_by else None
             if target is not None:
                 log.info("el_bridge.outbound_answered", target=target.key, purpose=request.purpose)
+                clip = self.pick_punchline("f" if target.gender == "f" else "m")
+                if clip and call_uuid:
+                    self.punchlines[call_uuid] = clip
                 return {
                     "type": "conversation_initiation_client_data",
                     "dynamic_variables": {
@@ -500,6 +554,22 @@ class ElevenLabsBridge:
                 **style_for_call(),
             },
         }
+
+    def pick_punchline(self, gender: str) -> bytes | None:
+        if not self.punchline_dir or not self.voice_id:
+            return None
+        from pathlib import Path
+
+        clips = sorted(Path(self.punchline_dir).glob(f"{self.voice_id}-{gender}-*.pcm"))
+        if not clips:
+            log.warning("el_bridge.no_punchline_clips", gender=gender)
+            return None
+        import random
+
+        return random.choice(clips).read_bytes()
+
+    def punchline_for(self, call_uuid: bytes) -> bytes | None:
+        return self.punchlines.pop(call_uuid, None)
 
     def limit_for(self, call_uuid: bytes) -> float | None:
         return OUTBOUND_MAX_CALL_SECONDS if call_uuid in self.pending_outbound else None
@@ -546,6 +616,7 @@ class ElevenLabsBridge:
                 writer,
                 open_agent=self.open_agent,
                 limit_for=self.limit_for,
+                punchline_for=self.punchline_for,
                 on_speech=self.activity.mark if self.activity else None,
                 is_saving=self.activity.is_saving if self.activity else None,
                 typing_volume=self.typing_volume,

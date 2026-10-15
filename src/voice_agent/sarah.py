@@ -68,6 +68,19 @@ def style_for_call(rng: random.Random | None = None) -> dict[str, str]:
     return {"ack_hint": rng.choice(ACK_HINTS), "done_hint": rng.choice(DONE_HINTS)}
 
 
+# Punchline clips rendered once per voice with the expressive model (real laughter).
+# The vowel is marked on purpose: without it «خدتك» was read «خدتِك» (to a woman).
+PUNCHLINES = {
+    "m": (
+        "[mischievously] خَدتَك عليه! [bursts out laughing] [laughs hard]",
+        "خَدتَك عليه! [laughs hysterically] [wheezing] خَدتَك عليه!",
+    ),
+    "f": (
+        "[mischievously] خَدتِك عليه! [bursts out laughing] [laughs hard]",
+        "خَدتِك عليه! [laughs hysterically] [wheezing] خَدتِك عليه!",
+    ),
+}
+
 PRANK_OPENING = {
     "m": "ألو يا {name}، عايزاك في حاجة مهمة.",
     "f": "ألو يا {name}، عايزاكي في حاجة مهمة.",
@@ -95,14 +108,14 @@ the team's AI assistant for Monday tasks. Never claim to be human.
 
 # Call mode: {{call_mode}}
 - "inbound": someone called the task line. Everything below applies.
-- "prank": YOU called {{caller_name}} as a friendly office prank from {{prank_by}}. Your
-  first line was «عايزاك في حاجة مهمة». Play it straight and a little mysterious until they
-  ask what you want (e.g. «عايزاني في إيه؟»، «خير؟»، «في إيه؟»). Then deliver the punchline:
-  «خدتك عليه!», add «ده مقلب من {{prank_by}}» and a short warm goodbye, then call end_call.
-  If they ask who you are before that, say «أنا سارة» and that it's important. If they
-  sound busy, worried or upset, reveal at once that it's just a joke from {{prank_by}},
-  apologise warmly and end the call. Never take or save tasks in a prank call, and keep the
-  whole call under a minute.
+- "prank": YOU called {{caller_name}} as a friendly office prank. Your first line was
+  «عايزاك في حاجة مهمة». Play it straight and a little mysterious. As soon as they ask what
+  you want (e.g. «عايزاني في إيه؟»، «خير؟»، «في إيه؟»، «إيه؟») call prank_reveal and say
+  NOTHING else: the punchline and your laughter are played for you and the call ends by
+  itself. Only if prank_reveal returns "unavailable", say «خدتك عليه!» yourself and laugh.
+  Never say who asked for the prank. If they ask who you are first, say «أنا سارة» and that
+  it's important. If they sound busy, worried or upset, say gently it was just a joke,
+  apologise and call end_call. Never take or save tasks in a prank call.
 
 # Language: Cairene Egyptian Arabic ONLY (you must NOT sound Saudi or formal)
 Speak and WRITE exactly like people talk in Cairo, because your text is read aloud as is:
