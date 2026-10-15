@@ -97,8 +97,9 @@ async def test_first_sync_creates_everything_with_documented_shapes(el_settings,
     }
     prompt_text = agent["agent"]["prompt"]["prompt"]
     assert "{{caller_gender}}" in prompt_text and "أبغى" in prompt_text  # Gulf words banned
-    assert agent["tts"]["expressive_mode"] is True
-    assert {t["tag"] for t in agent["tts"]["suggested_audio_tags"]} >= {"[laughs]", "[sighs]"}
+    # default: Egyptian voice on the fast model -> no audio tags anywhere
+    assert agent["tts"]["model_id"] == "eleven_v4_turbo"
+    assert "expressive_mode" not in agent["tts"] and "[" not in prompt_text
     assert {"محمد", "أحمد", "حمادة"} <= set(agent["asr"]["keywords"])
     assert "{{ack_hint}}" in agent["agent"]["prompt"]["prompt"]
     fillers = agent["turn"]["soft_timeout_config"]
@@ -112,7 +113,7 @@ async def test_first_sync_creates_everything_with_documented_shapes(el_settings,
     assert '"already_saved"' in prompt
     assert "Never say a task is saved, cancelled or changed unless the tool result" in prompt
     assert "{{caller_name}}" in prompt and "{people}" not in prompt
-    assert agent["tts"]["voice_id"] == "I3u6waC588j43py1kDN2"
+    assert agent["tts"]["voice_id"] == "L10lEremDiJfPicq5CPh"  # Yasmine (Egyptian)
     assert agent["turn"]["turn_eagerness"] == "eager"
 
     phone = by_path[("POST", "/v1/convai/phone-numbers")]
@@ -151,3 +152,12 @@ def test_prompt_matches_the_voice_model():
     assert "[laughs]" in expressive and "[happy]" in expressive
     assert "[" not in plain  # no tag examples at all on a non-expressive model
     assert "Never write anything in square brackets" in plain
+
+
+def test_expressive_model_gets_audio_tags(el_settings):
+    from voice_agent.elevenlabs_agent import build_tts
+
+    el_settings.elevenlabs_agent_tts_model = "eleven_v3_conversational"
+    tts = build_tts(el_settings)
+    assert tts["expressive_mode"] is True
+    assert {t["tag"] for t in tts["suggested_audio_tags"]} >= {"[laughs]", "[sighs]"}
