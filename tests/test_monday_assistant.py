@@ -136,6 +136,22 @@ async def test_tools_read_boards_items_and_labels():
     items = json.loads(await tools.call("get_items", {"board_id": "5098517650", "search": "reel"}))
     assert items["items"][0]["columns"] == {"Status": "Stuck", "Owner": "Ziad"}
     rules = fake.requests[-1]["variables"]["qp"]["rules"]
+    ITEMS.append(
+        {
+            "id": "2",
+            "name": "Old",
+            "group": {"id": "g2", "title": "Resolved"},
+            "column_values": [{"id": "status", "text": "Done", "column": {"title": "Status"}}],
+        }
+    )
+    try:
+        open_items = json.loads(
+            await tools.call("get_items", {"board_id": "5098517650", "open_only": True})
+        )
+    finally:
+        ITEMS.pop()
+    assert [i["name"] for i in open_items["items"]] == ["Shoot reel"]
+    assert open_items["finished_skipped"] == 1
     assert rules == [{"column_id": "name", "compare_value": ["reel"], "operator": "contains_text"}]
 
     refused = json.loads(

@@ -264,22 +264,29 @@ TAG = re.compile(r"\[[a-z ]+\]\s*")
 
 MONDAY_SECTION = """\
 # Anything else on Monday (inbound calls only)
-You can also see and change EVERYTHING on Monday through monday_assistant: reviewing a
-board, «إيه اللي عند زياد؟», what's late or stuck, details of an item or project, changing
-a status, date, owner or name, adding an update, moving or archiving an item, items on any
-board. A plain new task for a team member still goes through submit_task.
-1. Say ONE short filler first, varied, e.g. «ثانية أبصلك.» · «لحظة أشوف Monday.» ·
-   «حاضر، ثواني.», then call monday_assistant with the caller's full request in their words
-   (resolve «دي/ده/التاني» from earlier in the call).
-2. What it returns:
-   - "ok": say "answer" naturally as your own words, keeping every fact, name, number and
-     date exactly. Don't add anything. If it ends with a question, ask it and pass the
-     caller's reply to monday_assistant as the next request.
-   - "not_allowed": this caller may only add tasks, e.g. «معلش، دي مش متاحة ليك من هنا، بس
-     أقدر أسجلك تاسك.»
-   - "unavailable": Monday access isn't set up yet.
-   - "failed": «معلش، Monday مش بيرد دلوقتي، جرب تاني كمان شوية.»
-3. Never say something was changed on Monday unless the answer says so.
+You can see and change EVERYTHING on Monday, but only through the monday_assistant tool.
+You yourself know NOTHING about what is on Monday.
+- Use it for: reviewing a board, «إيه اللي عند أحمد؟», what's late or stuck, details of an
+  item or project, changing a status, date, owner or name, adding an update, moving or
+  archiving an item. A plain new task for a team member still goes through submit_task.
+- EVERY Monday question is a NEW monday_assistant call, including follow-ups and doubts:
+  «اتأكدي»، «بصي تاني»، «بصي على بورد Request tasks»، «إنتي بتبصي على أنهي بورد؟»، «والتانية؟».
+  Put the caller's words in "request", plus what they refer to from earlier in the call
+  (e.g. «اتأكدي من تاسكات أحمد النهاردة، هو متأكد إن فيه»).
+- Call the tool right away, in the same turn. Never say «ثواني» or «هشوف» without calling
+  it. Your waiting line before it is ONLY one of: «ثانية أبصلك.» · «لحظة أشوف.» · «حاضر،
+  ثواني.» · «ثواني أدور.». Nothing else: no result, no guess, no question.
+- Never answer a Monday question from memory or from an earlier answer, and never say
+  «أنا شايفة» or «أنا متأكدة» about Monday without a fresh result.
+What it returns:
+- "ok": say "answer" as your own words, short, keeping every fact, name, number and date
+  exactly. Add nothing. If it ends with a question, ask it, and send the caller's reply
+  to monday_assistant as the next request.
+- "not_allowed": this caller may only add tasks, e.g. «معلش، دي مش متاحة ليك من هنا، بس
+  أقدر أسجلك تاسك.»
+- "unavailable": Monday access isn't set up yet.
+- "failed": «معلش، Monday مش بيرد دلوقتي، جرب تاني كمان شوية.»
+Never say something was changed on Monday unless the answer says so.
 
 """
 

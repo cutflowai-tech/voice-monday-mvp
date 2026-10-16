@@ -128,6 +128,7 @@ def create_app(settings: Settings | None = None, container: Container | None = N
                 allowed=s.monday_assistant_allowed(),
                 callers=container.callers,
                 directory=container.directory,
+                monday_users=container.boards.monday_users,
                 activity=activity,
                 timeout_seconds=s.monday_assistant_timeout_seconds,
             )

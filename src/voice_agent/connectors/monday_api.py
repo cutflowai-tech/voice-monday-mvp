@@ -37,8 +37,10 @@ from voice_agent.logging_setup import get_logger
 
 log = get_logger(__name__)
 
-RESULT_LIMIT = 12_000  # characters of tool output handed back to the LLM
+RESULT_LIMIT = 24_000  # characters of tool output handed back to the LLM
 MAP_TTL_SECONDS = 300  # boards and users are re-read every 5 minutes
+# Status texts (any column) or group titles that mean an item is finished
+CLOSED = {"done", "resolved", "completed", "complete", "closed", "finished", "تم", "خلصت"}
 SEARCH_BOARDS = 60  # most recently used boards searched by search_items
 SEARCH_CONCURRENCY = 6
 
@@ -119,7 +121,8 @@ class MondayTools:
         {
             "name": "get_items",
             "description": (
-                "Items of one board with every column as text. Optional: search (part of "
+                "Items of one board with every column as text. open_only: true drops "
+                "finished items (Done/Resolved…). Optional: search (part of "
                 "the item name), group_id, rules (Monday items_page rules, e.g. "
                 '[{"column_id":"status","compare_value":[1],"operator":"any_of"}] or '
                 '[{"column_id":"person","compare_value":["person-123"],"operator":"any_of"}]).'
@@ -130,7 +133,8 @@ class MondayTools:
                     "search": {"type": "string"},
                     "group_id": {"type": "string"},
                     "rules": {"type": "array", "items": {"type": "object"}},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "open_only": {"type": "boolean"},
                 },
                 ["board_id"],
             ),
@@ -297,7 +301,8 @@ class MondayTools:
         search: str | None = None,
         group_id: str | None = None,
         rules: list[dict] | None = None,
-        limit: int = 50,
+        limit: int = 200,
+        open_only: bool = False,
     ) -> dict:
         all_rules = list(rules or [])
         if search:
@@ -320,7 +325,7 @@ class MondayTools:
             variables = {}
         data = await self.api.run(
             query,
-            {"id": [str(board_id)], "limit": max(1, min(int(limit), 100)), "qp": params}
+            {"id": [str(board_id)], "limit": max(1, min(int(limit), 200)), "qp": params}
             | variables,
         )
         boards = data.get("boards") or []
@@ -334,7 +339,12 @@ class MondayTools:
             holder = groups[0]
         page_data = holder.get("items_page") or {}
         items = [_item_summary(i) for i in page_data.get("items") or []]
-        return {"count": len(items), "more": bool(page_data.get("cursor")), "items": items}
+        result: dict[str, Any] = {"more": bool(page_data.get("cursor"))}
+        if open_only:
+            result["finished_skipped"] = len(items)
+            items = [i for i in items if not _finished(i)]
+            result["finished_skipped"] -= len(items)
+        return {"count": len(items), **result, "items": items}
 
     async def _t_search_items(self, text: str) -> dict:
         boards = [b for b in await self.boards() if b.get("items")][:SEARCH_BOARDS]
@@ -474,6 +484,11 @@ def _columns(values: list[dict]) -> dict[str, str]:
         for v in values
         if v.get("text")
     }
+
+
+def _finished(item: dict) -> bool:
+    texts = [*item["columns"].values(), item.get("group") or ""]
+    return any(str(t).strip().lower() in CLOSED for t in texts)
 
 
 def _item_summary(item: dict) -> dict:
