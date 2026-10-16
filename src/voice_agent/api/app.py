@@ -15,10 +15,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from voice_agent.agent_tools.activity import SpeechActivity
+from voice_agent.agent_tools.monday_assistant import MondayAssistant
 from voice_agent.agent_tools.outbound import OutboundCalls
 from voice_agent.agent_tools.router import router as agent_tools_router
 from voice_agent.agent_tools.window import TaskWindow
 from voice_agent.config import Role, Settings, load_settings
+from voice_agent.connectors.monday_api import MondayAPI, MondayTools
 from voice_agent.container import Container, build_container
 from voice_agent.conversation.engine import ConversationState
 from voice_agent.jobs.queue import RedisJobQueue
@@ -113,17 +115,42 @@ def create_app(settings: Settings | None = None, container: Container | None = N
             and isinstance(container.queue, RedisJobQueue)
             else None
         )
+        app.state.monday_assistant = (
+            MondayAssistant(
+                tools=MondayTools(
+                    MondayAPI(
+                        s.monday_api_token, url=s.monday_api_url, version=s.monday_api_version
+                    )
+                ),
+                api_key=s.agent_api_key,
+                model=s.monday_assistant_llm(),
+                provider=s.agent_provider,
+                allowed=s.monday_assistant_allowed(),
+                callers=container.callers,
+                directory=container.directory,
+                activity=activity,
+                timeout_seconds=s.monday_assistant_timeout_seconds,
+            )
+            if s.agent_tool_secret
+            and s.agent_api_key
+            and s.monday_api_token
+            and s.monday_assistant_allowed()
+            else None
+        )
         log.info(
             "api.started",
             monday_mode=s.monday_mode,
             agent_tools=app.state.task_window is not None,
             outbound_calls=app.state.outbound is not None,
+            monday_assistant=app.state.monday_assistant is not None,
         )
         try:
             yield
         finally:
             if app.state.task_window:
                 await app.state.task_window.aclose()
+            if app.state.monday_assistant:
+                await app.state.monday_assistant.aclose()
             await container.aclose()
             log.info("api.stopped")
 

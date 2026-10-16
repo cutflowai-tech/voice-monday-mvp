@@ -195,7 +195,7 @@ Start your first repeat in the style «{{ack_hint}}» and your first confirmatio
    already on Monday: say so honestly and suggest deleting it there; "nothing_pending" →
    nothing was saved: «ماشي، مش هسجلها.»
 
-# Calling someone (inbound calls only)
+{monday}# Calling someone (inbound calls only)
 If the caller asks you to call a team member to prank them (e.g. «اتصلي بأحمد واعملي فيه
 مقلب»), answer playfully, e.g. «ماشي، سيبه عليا!», and call call_person with that person's
 key. What call_person returns:
@@ -212,7 +212,7 @@ key. What call_person returns:
   such as بكرة، بعد بكرة، يوم الخميس.
 - Keep turns short: one or two sentences. No confirmation questions before saving, no
   lists, no emojis, and no stage directions in words (only the audio tags above).
-- Anything other than tasks: say kindly that you only take tasks for Monday.
+{other}
 - When the caller says goodbye, say a short warm goodbye, e.g. «مع السلامة» or
   «في رعاية الله».
 """
@@ -262,6 +262,32 @@ EXPRESSIONS_WORDS = """\
 
 TAG = re.compile(r"\[[a-z ]+\]\s*")
 
+MONDAY_SECTION = """\
+# Anything else on Monday (inbound calls only)
+You can also see and change EVERYTHING on Monday through monday_assistant: reviewing a
+board, «إيه اللي عند زياد؟», what's late or stuck, details of an item or project, changing
+a status, date, owner or name, adding an update, moving or archiving an item, items on any
+board. A plain new task for a team member still goes through submit_task.
+1. Say ONE short filler first, varied, e.g. «ثانية أبصلك.» · «لحظة أشوف Monday.» ·
+   «حاضر، ثواني.», then call monday_assistant with the caller's full request in their words
+   (resolve «دي/ده/التاني» from earlier in the call).
+2. What it returns:
+   - "ok": say "answer" naturally as your own words, keeping every fact, name, number and
+     date exactly. Don't add anything. If it ends with a question, ask it and pass the
+     caller's reply to monday_assistant as the next request.
+   - "not_allowed": this caller may only add tasks, e.g. «معلش، دي مش متاحة ليك من هنا، بس
+     أقدر أسجلك تاسك.»
+   - "unavailable": Monday access isn't set up yet.
+   - "failed": «معلش، Monday مش بيرد دلوقتي، جرب تاني كمان شوية.»
+3. Never say something was changed on Monday unless the answer says so.
+
+"""
+
+OTHER_TASKS_ONLY = "- Anything other than tasks: say kindly that you only take tasks for Monday."
+OTHER_WITH_MONDAY = (
+    "- Anything not about tasks or Monday: say kindly that you only help with Monday."
+)
+
 
 def boards_section(boards, people: list[Person]) -> str:
     """Prompt text for choosing a Monday board (empty when there is only one board)."""
@@ -292,11 +318,16 @@ def boards_section(boards, people: list[Person]) -> str:
     return text
 
 
-def build_prompt(people: list[Person], *, expressive: bool = True, boards=None) -> str:
+def build_prompt(
+    people: list[Person], *, expressive: bool = True, boards=None, monday_assistant=False
+) -> str:
     """``expressive``: the TTS model performs audio tags (eleven_v3*); otherwise the prompt
     asks for feelings in words and the examples carry no tags. ``boards``: a
-    BoardDirectory; with more than one board the prompt explains how to pick one."""
+    BoardDirectory; with more than one board the prompt explains how to pick one.
+    ``monday_assistant``: she may answer questions and make changes on all of Monday."""
     prompt = PROMPT.replace("{people}", team_lines(people))
+    prompt = prompt.replace("{monday}", MONDAY_SECTION if monday_assistant else "")
+    prompt = prompt.replace("{other}", OTHER_WITH_MONDAY if monday_assistant else OTHER_TASKS_ONLY)
     prompt = prompt.replace("{boards}", boards_section(boards, people))
     if expressive:
         return prompt.replace("{expressions}", EXPRESSIONS_TAGS)

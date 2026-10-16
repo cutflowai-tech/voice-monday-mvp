@@ -97,6 +97,52 @@ New tasks on the Account Managers boards go to the **Ready To Start** group. The
 comes from the task's words (بكرة، بعد بكرة، النهارده، يوم الخميس…, in Cairo time), or
 today. People columns need Monday *user* ids (`monday_users`); Mohamed is Mohamed Mohsen.
 
+## Everything else on Monday (the Monday assistant)
+
+Besides taking tasks, Sarah can answer questions and make changes anywhere on Monday:
+- «راجعيلي بورد الأكاونت مانجرز»
+- «إيه اللي متأخر عند زياد؟»
+- «تاسك الكاميرات وصلت لفين؟»
+- «خلي تاسك الريل Done»
+- «حطي update على بروجكت كذا»
+- «انقلها لجروب Done»
+- «أرشفيها»
+
+How a request flows:
+1. Sarah says a short filler («ثانية أبصلك») and calls the `monday_assistant` webhook with
+   the request.
+2. The api (`agent_tools/monday_assistant.py`) gives it to a stronger LLM, `gpt-4.1` by
+   default. That LLM can use Monday tools (`connectors/monday_api.py`):
+   - `get_board`, `get_items`, `search_items`, `get_item`
+   - `update_item`, `create_item`, `add_update`, `move_item`, `archive_item`
+   - a `graphql` escape hatch for anything else
+3. The LLM sees a map of every board and user (refreshed every 5 minutes), so it usually
+   answers in one to three steps.
+4. Sarah reads back its short Egyptian answer. The keyboard sound plays while it works.
+5. Follow-ups («والتانية؟»، «أيوه اعملها») work: each call keeps its own memory for
+   30 minutes.
+
+Safety:
+- **Who can use it:** only callers whose extension maps to a person in
+  `MONDAY_ASSISTANT_CALLERS` (default `mohamed`, ext 101). Anyone else gets
+  `not_allowed`, and Sarah offers to take a task instead.
+- **Nothing is deleted:** removing means archiving, which can be restored from Monday.
+- **Blocked mutations:** the escape hatch refuses deletions and user, team, permission,
+  webhook and board/group/workspace archive mutations.
+- **Bulk changes:** the assistant asks before changing more than 3 items at once.
+
+Settings:
+
+| Variable | Meaning |
+|---|---|
+| `AGENT_API_KEY`, `AGENT_PROVIDER` | The LLM (OpenAI or OpenRouter key). Without a key, the tool isn't offered to Sarah. |
+| `MONDAY_ASSISTANT_MODEL` | Default `gpt-4.1` (or `openai/gpt-4.1` on OpenRouter). |
+| `MONDAY_ASSISTANT_CALLERS` | Comma-separated person keys, default `mohamed`. |
+| `MONDAY_ASSISTANT_TIMEOUT_SECONDS` | Default 50. Sarah's webhook waits this long plus 10 s. |
+
+After changing these settings, restart the `api` service and run `el-agent sync`, so Sarah
+gets the tool and the prompt section.
+
 ## Sarah calls people (prank mode)
 
 On a normal call you can ask «اتصلي بأحمد واعملي فيه مقلب». What happens:

@@ -33,6 +33,12 @@ class CancelLastRequest(BaseModel):
     conversation_id: str = Field(pattern=CONVERSATION_PATTERN)
 
 
+class MondayAssistantRequest(BaseModel):
+    conversation_id: str = Field(pattern=CONVERSATION_PATTERN)
+    request: str = Field(min_length=1, max_length=2000)
+    caller_id: str | None = Field(default=None, max_length=64)
+
+
 class CallPersonRequest(BaseModel):
     conversation_id: str = Field(pattern=CONVERSATION_PATTERN)
     person_key: str = Field(min_length=1, max_length=64)
@@ -92,4 +98,19 @@ async def call_person(
         target_key=body.person_key.strip().lower(),
         purpose=body.purpose,
         caller_id=body.caller_id,
+    )
+
+
+@router.post("/monday_assistant")
+async def monday_assistant(
+    body: MondayAssistantRequest,
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    _window(request, authorization)  # same bearer check as the task tools
+    assistant = getattr(request.app.state, "monday_assistant", None)
+    if assistant is None:
+        return {"status": "unavailable"}
+    return await assistant.ask(
+        conversation_id=body.conversation_id, request=body.request, caller_id=body.caller_id
     )

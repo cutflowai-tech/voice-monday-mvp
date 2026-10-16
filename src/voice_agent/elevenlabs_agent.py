@@ -51,6 +51,7 @@ SECRET_NAME = "voice-monday-tool-bearer"  # noqa: S105 (a name, not a value)
 TOOL_SUBMIT = "submit_task"
 TOOL_CANCEL = "cancel_last"
 TOOL_CALL = "call_person"
+TOOL_MONDAY = "monday_assistant"
 TOOL_PRANK_REVEAL = "prank_reveal"  # client tool, handled by the AudioSocket bridge
 PRANK_DIR = "data/prank"
 
@@ -67,6 +68,7 @@ def build_tools(
     secret_id: str,
     callable_people: list[Person] | None = None,
     boards: BoardDirectory | None = None,
+    monday_assistant: bool = False,
 ) -> dict[str, dict]:
     base = settings.agent_public_url.rstrip("/")
     headers = {"Authorization": {"secret_id": secret_id}}
@@ -159,6 +161,46 @@ def build_tools(
         },
     }
     tools = {TOOL_SUBMIT: submit, TOOL_CANCEL: cancel}
+    if monday_assistant:
+        tools[TOOL_MONDAY] = {
+            "type": "webhook",
+            "name": TOOL_MONDAY,
+            "description": (
+                "Ask the Monday back office anything about Monday, or have it change "
+                "something there: review a board, find items, who has what, what's late, "
+                "change a status/date/owner, add an update, move or archive an item. Returns "
+                "a short spoken answer. Not for a simple new task for a team member (that's "
+                "submit_task)."
+            ),
+            "response_timeout_secs": max(10, int(settings.monday_assistant_timeout_seconds) + 10),
+            "pre_tool_speech": "force",
+            "tool_call_sound": None,  # the bridge plays the keyboard while it works
+            "execution_mode": settings.elevenlabs_tool_execution_mode,
+            "interruption_mode": "allow",
+            "api_schema": {
+                "url": f"{base}/agent/tools/{TOOL_MONDAY}",
+                "method": "POST",
+                "content_type": "application/json",
+                "request_headers": headers,
+                "request_body_schema": {
+                    "type": "object",
+                    "required": ["conversation_id", "request"],
+                    "properties": {
+                        "conversation_id": conversation,
+                        "caller_id": {"type": "string", "dynamic_variable": "caller_id"},
+                        "request": {
+                            "type": "string",
+                            "description": (
+                                "The caller's request in their own words, complete (board, "
+                                "item, person, dates), including what «it/that» refers to "
+                                "from earlier in the call. For a reply to the back office's "
+                                "question, the caller's answer as said."
+                            ),
+                        },
+                    },
+                },
+            },
+        }
     if callable_people:
         tools[TOOL_CALL] = {
             "type": "webhook",
@@ -243,6 +285,7 @@ def build_agent(
     people: list[Person],
     tool_ids: list[str],
     boards: BoardDirectory | None = None,
+    monday_assistant: bool = False,
 ) -> dict:
     return {
         "name": f"{NAME_EN} ({NAME_AR}) - Waset Co task line",
@@ -268,6 +311,7 @@ def build_agent(
                     "prompt": build_prompt(
                         people,
                         boards=boards,
+                        monday_assistant=monday_assistant,
                         expressive=settings.elevenlabs_agent_tts_model.startswith("eleven_v3"),
                     ),
                     "llm": settings.elevenlabs_agent_llm,
@@ -373,6 +417,11 @@ class ElevenLabsAgentSync:
             raise RuntimeError(f"{method} {path} -> HTTP {response.status_code}: {response.text}")
         return response.json() if response.content else {}
 
+    def monday_assistant_enabled(self) -> bool:
+        """Same conditions as the api's /agent/tools/monday_assistant endpoint."""
+        s = self.s
+        return bool(s.agent_api_key and s.monday_api_token and s.monday_assistant_allowed())
+
     def callable_people(self, directory: PeopleDirectory) -> list[Person]:
         """Team members Sarah may phone: outbound enabled and an extension on file."""
         if not self.s.agent_outbound_enabled or not self.s.caller_directory_file:
@@ -404,6 +453,7 @@ class ElevenLabsAgentSync:
             state["secret_id"],
             callable_people=self.callable_people(directory),
             boards=boards,
+            monday_assistant=self.monday_assistant_enabled(),
         )
         tool_ids = state.setdefault("tool_ids", {})
         for name, config in tools.items():
@@ -416,7 +466,13 @@ class ElevenLabsAgentSync:
                 tool_ids[name] = created["id"]
                 self._save(state)
 
-        agent_body = build_agent(self.s, people, [tool_ids[n] for n in tools], boards)
+        agent_body = build_agent(
+            self.s,
+            people,
+            [tool_ids[n] for n in tools],
+            boards,
+            monday_assistant=self.monday_assistant_enabled(),
+        )
         agent_id = state.get("agent_id") or self.s.elevenlabs_agent_id
         if agent_id:
             await self._call("PATCH", f"/v1/convai/agents/{agent_id}", agent_body)

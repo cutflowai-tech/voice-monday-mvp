@@ -133,6 +133,12 @@ class Settings(BaseSettings):
     # Sarah may call team extensions (e.g. pranks); needs ARI and the PBX outbound context
     agent_outbound_enabled: bool = False
     agent_outbound_caller_id: str = "Sarah <777>"
+    # Sarah's Monday assistant (questions and changes on all of Monday, see
+    # agent_tools/monday_assistant.py): needs AGENT_API_KEY and the Monday token.
+    # Person keys (from the caller directory) allowed to use it; empty = nobody.
+    monday_assistant_callers: str = "mohamed"
+    monday_assistant_model: str = ""  # default: gpt-4.1 (openai/gpt-4.1 on OpenRouter)
+    monday_assistant_timeout_seconds: float = Field(default=50.0, ge=5, le=280)
     elevenlabs_agent_id: str = ""
     elevenlabs_phone_number_id: str = ""
     elevenlabs_agent_voice_id: str = "L10lEremDiJfPicq5CPh"  # Yasmine, Egyptian agent voice
@@ -162,6 +168,14 @@ class Settings(BaseSettings):
     @property
     def sqlite_path(self) -> Path:
         return sqlite_path_from_url(self.database_url)
+
+    def monday_assistant_allowed(self) -> set[str]:
+        return {k.strip().lower() for k in self.monday_assistant_callers.split(",") if k.strip()}
+
+    def monday_assistant_llm(self) -> str:
+        if self.monday_assistant_model:
+            return self.monday_assistant_model
+        return "openai/gpt-4.1" if self.agent_provider == "openrouter" else "gpt-4.1"
 
     def monday_person_ids(self, environ: dict[str, str] | None = None) -> dict[str, int]:
         """Discover ``MONDAY_<NAME>_PERSON_ID`` variables -> {"mohamed": 123}.
