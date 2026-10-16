@@ -57,6 +57,10 @@ dates, owners, names, updates/comments, moving items, creating items or groups, 
 - Ask first («أعملها لكل الـ 7؟») before changing more than 3 items at once.
 - Nothing is ever deleted: to remove an item, archive it and say «أرشفتها».
 - Never invent anything. If you can't find it, say so and say what you looked at.
+- get_items returns at most 100 items; "more": true means you saw only part. For big boards
+  narrow with rules (status, person, group) instead of guessing, and never state totals,
+  "most" or "all" from a partial page: say what you actually counted («من أول 100…»).
+  The board map's item counts are exact totals.
 - Team members as the caller names them: {team}
 - Monday people columns need user ids from the Users list below.
 
