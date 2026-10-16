@@ -351,3 +351,30 @@ def test_assistant_model_defaults():
         "mohamed",
         "amir",
     }
+
+
+async def test_map_is_kept_warm_and_sounds_are_elevenlabs():
+    from voice_agent.elevenlabs_agent import build_agent, build_tools
+
+    fake = FakeMonday()
+    assistant = assistant_with(FakeLLM([]), fake)
+    assistant.start()
+    await asyncio.sleep(0.05)
+    assert any("boards(limit" in r["query"] for r in fake.requests)  # fetched before any call
+    await assistant.aclose()
+
+    people = list(PeopleDirectory.load())
+    settings = Settings(agent_public_url="https://x")
+    tools = build_tools(settings, people, "sec", monday_assistant=True)
+    for tool in (tools["submit_task"], tools["monday_assistant"]):
+        assert tool["tool_call_sound"] == "typing"
+        assert tool["tool_call_sound_behavior"] == "always"
+    assert tools["monday_assistant"]["pre_tool_speech"] == "off"  # no «ثواني أدور»
+    config = build_agent(settings, people, [])["conversation_config"]
+    assert config["turn"]["soft_timeout_config"] == {"timeout_seconds": -1}
+    assert config["conversation"]["background_sound"]["source_id"] == "office2"
+    quiet = Settings(elevenlabs_background_sound="", elevenlabs_tool_call_sound="")
+    assert build_agent(quiet, people, [])["conversation_config"]["conversation"] == {
+        "background_sound": {"source_type": None, "source_id": None}
+    }
+    assert build_tools(quiet, people, "sec")["submit_task"]["tool_call_sound"] is None

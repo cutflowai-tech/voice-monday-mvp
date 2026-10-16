@@ -32,6 +32,7 @@ from voice_agent.logging_setup import get_logger
 log = get_logger(__name__)
 
 MEMORY_TTL_SECONDS = 1800
+WARM_EVERY_SECONDS = 240  # inside the tools' 5-minute map cache
 MEMORY_MAX_CHARS = 60_000  # oldest exchanges are dropped beyond this
 WEEKDAYS_AR = ("الاتنين", "التلات", "الأربع", "الخميس", "الجمعة", "السبت", "الحد")
 
@@ -137,7 +138,22 @@ class MondayAssistant:
             transport=transport,
         )
 
+    def start(self) -> None:
+        """Keep the board/user map fresh in the background, so no call waits for it."""
+        self._warmer = asyncio.create_task(self._keep_warm())
+
+    async def _keep_warm(self) -> None:
+        while True:
+            try:
+                await self.tools.workspace_map(refresh=True)
+            except Exception as exc:  # retried on the next round
+                log.warning("monday_assistant.warm_failed", error=type(exc).__name__)
+            await asyncio.sleep(WARM_EVERY_SECONDS)
+
     async def aclose(self) -> None:
+        warmer = getattr(self, "_warmer", None)
+        if warmer is not None:
+            warmer.cancel()
         await self._client.aclose()
         await self.tools.api.aclose()
 

@@ -79,7 +79,7 @@ async def test_first_sync_creates_everything_with_documented_shapes(el_settings,
     assert props["caller_id"]["dynamic_variable"] == "caller_id"  # set by the AudioSocket bridge
     assert props["assignee_key"]["enum"] == ["mohamed", "ahmed"]  # only people with Monday ids
     assert submit["pre_tool_speech"] == "force"
-    assert submit["tool_call_sound"] is None  # the bridge plays its own keyboard sound
+    assert submit["tool_call_sound"] == "typing"  # ElevenLabs keyboard while saving
     assert 5 <= submit["response_timeout_secs"] <= 300
 
     agent_body = by_path[("POST", "/v1/convai/agents/create")]
@@ -108,8 +108,7 @@ async def test_first_sync_creates_everything_with_documented_shapes(el_settings,
     assert "expressive_mode" not in agent["tts"] and "[" not in prompt_text
     assert {"محمد", "أحمد", "حمادة"} <= set(agent["asr"]["keywords"])
     assert "{{ack_hint}}" in agent["agent"]["prompt"]["prompt"]
-    fillers = agent["turn"]["soft_timeout_config"]
-    assert fillers["randomize_fillers"] and fillers["additional_soft_timeout_messages"]
+    assert agent["turn"]["soft_timeout_config"] == {"timeout_seconds": -1}  # no fillers
     assert agent["agent"]["language"] == "ar"
     assert agent["agent"]["prompt"]["tool_ids"] == ["tool_2", "tool_3"]
     assert "mohamed: محمد (male" in agent["agent"]["prompt"]["prompt"]

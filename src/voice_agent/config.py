@@ -154,8 +154,15 @@ class Settings(BaseSettings):
     # AudioSocket bridge (extension 778 -> 127.0.0.1:9019 -> ElevenLabs WebSocket)
     el_bridge_host: str = "127.0.0.1"
     el_bridge_port: int = Field(default=9019, ge=1, le=65535)
-    # keyboard typing while a task is saved: 0 = off, 1 = normal, 2 = loud
-    el_bridge_typing_volume: float = Field(default=1.0, ge=0, le=3)
+    # our own keyboard recording while a task is saved: 0 = off (ElevenLabs' tool call
+    # sound plays instead), 1 = normal, 2 = loud
+    el_bridge_typing_volume: float = Field(default=0.0, ge=0, le=3)
+    # ElevenLabs sounds: keyboard while tools run ("typing", "elevator1"…, "" = none) and a
+    # looping background ambience under Sarah's voice ("office1", "office2", "restaurant",
+    # "city"…, "" = none)
+    elevenlabs_tool_call_sound: str = "typing"
+    elevenlabs_background_sound: str = "office2"
+    elevenlabs_background_volume: float = Field(default=0.15, ge=0.01, le=1.0)
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "json"
 

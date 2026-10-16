@@ -138,6 +138,8 @@ def create_app(settings: Settings | None = None, container: Container | None = N
             and s.monday_assistant_allowed()
             else None
         )
+        if app.state.monday_assistant is not None:
+            app.state.monday_assistant.start()
         log.info(
             "api.started",
             monday_mode=s.monday_mode,

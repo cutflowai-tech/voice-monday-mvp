@@ -39,7 +39,6 @@ from voice_agent.sarah import (
     ACK_HINTS,
     AUDIO_TAGS,
     DONE_HINTS,
-    FILLERS,
     NAME_AR,
     NAME_EN,
     OPENINGS_ANONYMOUS,
@@ -82,8 +81,7 @@ def build_tools(
         ),
         "response_timeout_secs": 15,
         "pre_tool_speech": "force",
-        # no platform sound: the bridge plays its own, louder keyboard while saving
-        "tool_call_sound": None,
+        **tool_sound(settings),
         "execution_mode": settings.elevenlabs_tool_execution_mode,
         "interruption_mode": "allow",
         "api_schema": {
@@ -173,9 +171,10 @@ def build_tools(
                 "submit_task)."
             ),
             "response_timeout_secs": max(10, int(settings.monday_assistant_timeout_seconds) + 10),
-            "pre_tool_speech": "force",
-            "tool_call_sound": None,  # the bridge plays the keyboard while it works
-            "execution_mode": settings.elevenlabs_tool_execution_mode,
+            # no waiting line: the lookup starts at once and the keyboard plays meanwhile
+            "pre_tool_speech": "off",
+            **tool_sound(settings),
+            "execution_mode": "immediate",
             "interruption_mode": "allow",
             "api_schema": {
                 "url": f"{base}/agent/tools/{TOOL_MONDAY}",
@@ -253,6 +252,28 @@ def build_tools(
             "execution_mode": "immediate",
         }
     return tools
+
+
+def tool_sound(settings: Settings) -> dict:
+    """ElevenLabs' own keyboard (or other) sound while a tool runs, even after pre-speech."""
+    if not settings.elevenlabs_tool_call_sound:
+        return {"tool_call_sound": None}
+    return {
+        "tool_call_sound": settings.elevenlabs_tool_call_sound,
+        "tool_call_sound_behavior": "always",
+    }
+
+
+def background_sound(settings: Settings) -> dict:
+    """Looping ambience under Sarah's voice (the agent and the ASR don't hear it)."""
+    if not settings.elevenlabs_background_sound:
+        return {"source_type": None, "source_id": None}
+    return {
+        "source_type": "preset",
+        "source_id": settings.elevenlabs_background_sound,
+        "volume": settings.elevenlabs_background_volume,
+        "crossfade_loop": True,
+    }
 
 
 def build_tts(settings: Settings) -> dict:
@@ -334,15 +355,10 @@ def build_agent(
                 "turn_timeout": 7,
                 "turn_eagerness": "eager",
                 "speculative_turn": True,
-                # if the model is ever slow, a short human filler instead of silence
-                "soft_timeout_config": {
-                    "timeout_seconds": 1.5,
-                    "message": FILLERS[0],
-                    "additional_soft_timeout_messages": list(FILLERS[1:]),
-                    "randomize_fillers": True,
-                    "use_llm_generated_message": False,
-                },
+                # no «ثانية واحدة» fillers while she waits (the keyboard sound covers tools)
+                "soft_timeout_config": {"timeout_seconds": -1},
             },
+            "conversation": {"background_sound": background_sound(settings)},
             "asr": {
                 "provider": "scribe_realtime",
                 "quality": "high",

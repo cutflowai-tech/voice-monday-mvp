@@ -97,6 +97,18 @@ New tasks on the Account Managers boards go to the **Ready To Start** group. The
 comes from the task's words (بكرة، بعد بكرة، النهارده، يوم الخميس…, in Cairo time), or
 today. People columns need Monday *user* ids (`monday_users`); Mohamed is Mohamed Mohsen.
 
+## Sounds
+
+| Variable | Default | What it does |
+|---|---|---|
+| `ELEVENLABS_TOOL_CALL_SOUND` | `typing` | ElevenLabs' keyboard while a tool runs (saving a task, looking on Monday). Other options are `elevator1`… or empty for none. |
+| `ELEVENLABS_BACKGROUND_SOUND` | `office2` | Office/call-centre ambience looping under Sarah's voice for the whole call. Other options are `office1`, `restaurant`, `city`, or empty for none. Neither the agent nor the speech recognition hears it. |
+| `ELEVENLABS_BACKGROUND_VOLUME` | `0.15` | Ambience volume relative to her voice, from 0.01 to 1. |
+| `EL_BRIDGE_TYPING_VOLUME` | `0` | Our own keyboard recording, mixed in by the bridge. It's off now, in favour of ElevenLabs' sound. |
+
+ElevenLabs' "thinking" fillers («ثانية واحدة»، «لحظة») are turned off
+(`soft_timeout_config.timeout_seconds = -1`). Run `el-agent sync` after changing any of these.
+
 ## Everything else on Monday (the Monday assistant)
 
 Besides taking tasks, Sarah can answer questions and make changes anywhere on Monday:
@@ -109,8 +121,8 @@ Besides taking tasks, Sarah can answer questions and make changes anywhere on Mo
 - «أرشفيها»
 
 How a request flows:
-1. Sarah says a short filler («ثانية أبصلك») and calls the `monday_assistant` webhook with
-   the request.
+1. Sarah calls the `monday_assistant` webhook with the request right away. She says no
+   waiting line; ElevenLabs' keyboard sound plays while it works.
 2. The api (`agent_tools/monday_assistant.py`) gives it to a stronger LLM, `gpt-4.1` by
    default. That LLM can use Monday tools (`connectors/monday_api.py`):
    - `get_board`, `get_items`, `search_items`, `get_item`
@@ -118,7 +130,8 @@ How a request flows:
    - a `graphql` escape hatch for anything else
 3. The LLM sees a map of every board and user (refreshed every 5 minutes), so it usually
    answers in one to three steps.
-4. Sarah reads back its short Egyptian answer. The keyboard sound plays while it works.
+4. Sarah reads back its short Egyptian answer. The board map is refreshed in the
+   background every 4 minutes, so no call waits for it.
 5. Follow-ups («والتانية؟»، «أيوه اعملها») work: each call keeps its own memory for
    30 minutes.
 

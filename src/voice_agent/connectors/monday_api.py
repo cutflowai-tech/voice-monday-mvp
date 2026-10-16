@@ -216,8 +216,8 @@ class MondayTools:
         self._users: tuple[float, list[dict]] | None = None
 
     # ------------------------------------------------------------------ workspace map
-    async def boards(self) -> list[dict]:
-        if self._boards and self._clock() - self._boards[0] < MAP_TTL_SECONDS:
+    async def boards(self, refresh: bool = False) -> list[dict]:
+        if not refresh and self._boards and self._clock() - self._boards[0] < MAP_TTL_SECONDS:
             return self._boards[1]
         found: list[dict] = []
         for page in range(1, 6):
@@ -242,8 +242,8 @@ class MondayTools:
         self._boards = (self._clock(), found)
         return found
 
-    async def users(self) -> list[dict]:
-        if self._users and self._clock() - self._users[0] < MAP_TTL_SECONDS:
+    async def users(self, refresh: bool = False) -> list[dict]:
+        if not refresh and self._users and self._clock() - self._users[0] < MAP_TTL_SECONDS:
             return self._users[1]
         data = await self.api.run("query{users(limit:500,kind:non_guests){id name email}}")
         users = [
@@ -253,8 +253,8 @@ class MondayTools:
         self._users = (self._clock(), users)
         return users
 
-    async def workspace_map(self) -> str:
-        boards, users = await asyncio.gather(self.boards(), self.users())
+    async def workspace_map(self, refresh: bool = False) -> str:
+        boards, users = await asyncio.gather(self.boards(refresh), self.users(refresh))
         board_lines = "\n".join(
             f"- {b['id']} | {b['name']} | {b['workspace']} | {b['items']} items" for b in boards
         )
