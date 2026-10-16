@@ -378,3 +378,133 @@ async def test_map_is_kept_warm_and_sounds_are_elevenlabs():
         "background_sound": {"source_type": None, "source_id": None}
     }
     assert build_tools(quiet, people, "sec")["submit_task"]["tool_call_sound"] is None
+
+
+def _cv(title: str, kind: str, text: str | None) -> dict:
+    return {"id": title.lower(), "text": text, "type": kind, "column": {"title": title}}
+
+
+async def test_person_items_does_the_filtering_and_dates_itself():
+    import datetime as dt
+
+    small = [
+        {
+            "id": "1",
+            "name": "Late one",
+            "group": {"id": "g", "title": "Unresolved"},
+            "column_values": [
+                _cv("Priority", "status", "High"),
+                _cv("Status", "status", "Unresolved"),
+                _cv("Timeline", "timeline", "2026-10-10 - 2026-10-12"),
+                _cv("Assign", "people", "Michael Aziz, amir mohamed"),
+            ],
+        },
+        {
+            "id": "2",
+            "name": "Due today",
+            "group": {"id": "g", "title": "Ready"},
+            "column_values": [
+                _cv("Status", "status", "Ready To Start"),
+                _cv("Timeline", "timeline", "2026-10-16 - 2026-10-16"),
+                _cv("Assign", "people", "Michael Aziz"),
+            ],
+        },
+        {
+            "id": "3",
+            "name": "Done one",
+            "group": {"id": "g", "title": "Ready"},
+            "column_values": [
+                _cv("Status", "status", "Resolved"),
+                _cv("Timeline", "timeline", "2026-10-01 - 2026-10-01"),
+                _cv("Assign", "people", "Michael Aziz"),
+            ],
+        },
+        {
+            "id": "4",
+            "name": "Someone else",
+            "group": {"id": "g", "title": "Ready"},
+            "column_values": [
+                _cv("Status", "status", "Ready To Start"),
+                _cv("Assign", "people", "Ziad shams"),
+            ],
+        },
+        {
+            "id": "5",
+            "name": "Group says done",
+            "group": {"id": "g", "title": "Resolved"},
+            "column_values": [_cv("Assign", "dropdown", "Michael")],
+        },
+    ]
+    big = [
+        {
+            "id": "9",
+            "name": "Project",
+            "group": {"id": "g", "title": "Active"},
+            "column_values": [
+                _cv("Status", "status", "Sent"),
+                _cv("Assign", "people", "Michael Aziz"),
+            ],
+        },
+        {
+            "id": "10",
+            "name": "Open project",
+            "group": {"id": "g", "title": "Active"},
+            "column_values": [
+                _cv("Requested ETA", "date", "2026-10-14 16:35"),
+                _cv("Captions Editor", "status", "Karim"),
+                _cv("Assign", "people", "Michael Aziz"),
+            ],
+        },
+    ]
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        query, variables = body["query"], body["variables"]
+        seen.append(body)
+        if "boards(limit" in query:
+            data = {
+                "boards": [
+                    {"id": "1", "name": "Michael Tasks", "type": "board", "items_count": 5},
+                    {"id": "2", "name": "Customer Projects", "type": "board", "items_count": 1384},
+                ]
+            }
+        elif "users(" in query:
+            data = {
+                "users": [
+                    {"id": "101717680", "name": "michael", "email": "m"},
+                    {"id": "99154857", "name": "Michael Aziz", "email": "a"},
+                ]
+            }
+        elif "change_multiple_column_values" in query:
+            data = {"change_multiple_column_values": {"id": "1", "name": "x"}}
+        elif "next_items_page" in query:
+            data = {"next_items_page": {"cursor": None, "items": big[1:]}}
+        elif variables["id"] == ["1"]:
+            data = {"boards": [{"items_page": {"cursor": None, "items": small}}]}
+        else:  # the big board comes in pages
+            data = {"boards": [{"items_page": {"cursor": "next", "items": big[:1]}}]}
+        return httpx.Response(200, json={"data": data})
+
+    tools = MondayTools(
+        MondayAPI("tok", transport=httpx.MockTransport(handler)),
+        today=lambda: dt.date(2026, 10, 16),
+    )
+    out = json.loads(await tools.call("person_items", {"person": "Michael Aziz"}))
+    assert [i["name"] for i in out["items"]] == ["Late one", "Open project", "Due today"]
+    assert out["count"] == 3 and out["late"] == 2 and out["due_today"] == 1
+    assert out["items"][0] == {
+        "board": "Michael Tasks",
+        "name": "Late one",
+        "status": "Unresolved",
+        "due": "2026-10-12",
+        "late_days": 4,
+    }
+    assert "types:[status,people,dropdown,date,timeline]" in seen[-1]["query"]  # light query
+
+    before = len(seen)
+    await tools.call("person_items", {"person": "Michael Aziz"})
+    assert len(seen) == before  # served from the cache
+    await tools.call("update_item", {"board_id": "1", "item_id": "1", "values": {}})
+    await tools.call("person_items", {"person": "Michael Aziz"})
+    assert sum("items_page" in r["query"] for r in seen[before:]) == 1  # only board 1 re-read

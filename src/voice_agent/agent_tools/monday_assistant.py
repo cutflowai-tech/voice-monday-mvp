@@ -32,7 +32,8 @@ from voice_agent.logging_setup import get_logger
 log = get_logger(__name__)
 
 MEMORY_TTL_SECONDS = 1800
-WARM_EVERY_SECONDS = 240  # inside the tools' 5-minute map cache
+WARM_EVERY_SECONDS = 60  # board items; inside the tools' 2-minute items cache
+MAP_EVERY_ROUNDS = 4  # the board/user map every 4 minutes
 MEMORY_MAX_CHARS = 60_000  # oldest exchanges are dropped beyond this
 WEEKDAYS_AR = ("الاتنين", "التلات", "الأربع", "الخميس", "الجمعة", "السبت", "الحد")
 
@@ -54,16 +55,13 @@ dates, owners, names, updates/comments, moving items, creating items or groups, 
   tasks). A person may have their own board (e.g. "Ahmed Tasks"); a person's tasks can
   also be on shared boards (Request tasks, Account Managers Tasks…): look at those too
   before saying they have nothing.
-- "X's tasks" («التاسكات اللي عند أحمد», «اللي محطوط لأحمد النهاردة») means X's OPEN
-  items on ALL boards: their own board first, then the shared ones. Only Done/Resolved
-  are closed; Unresolved, Stuck and the rest are open. «النهاردة» / «دلوقتي» in such a
-  question means "currently", not "dated today": give the open ones, and point out any
-  due today or late. Use get_items with open_only true, and read the boards in parallel
-  (several tool calls at once). Name every open item you got, or say the exact count.
+- A person's tasks («إيه اللي عند أحمد؟»، «إيه اللي متأخر عند مايكل؟»، «اللي محطوط لأحمد
+  النهاردة») → ONE person_items call with their Monday name from the team list. It
+  already searched every board, dropped finished items and worked out what's late or due
+  today: use its counts as they are, never recount or redo the dates. «النهاردة» /
+  «دلوقتي» in such a question means "currently": answer with the open count, then what's
+  late and what's due today. For «متأخر» answer with the late ones.
 - Call get_board before filtering or changing a board, to get exact column ids and labels.
-- To find a person's items, read the board's items and look at the owner/assignee column
-  text (it shows their name). Only use a people-column rule on big boards (over 200
-  items), with compare_value ["person-<monday user id>"] and the ids below.
 - Before saying "nothing found", double-check: read the items without filters, or look on
   the other likely boards. A filter that returns 0 is usually a wrong filter.
 - Before a change, be sure which item it is. If several items match, ask which one (name
@@ -143,11 +141,14 @@ class MondayAssistant:
         self._warmer = asyncio.create_task(self._keep_warm())
 
     async def _keep_warm(self) -> None:
+        rounds = 0
         while True:
             try:
-                await self.tools.workspace_map(refresh=True)
+                await self.tools.workspace_map(refresh=rounds % MAP_EVERY_ROUNDS == 0)
+                await self.tools.refresh_items()
             except Exception as exc:  # retried on the next round
                 log.warning("monday_assistant.warm_failed", error=type(exc).__name__)
+            rounds += 1
             await asyncio.sleep(WARM_EVERY_SECONDS)
 
     async def aclose(self) -> None:
@@ -257,10 +258,17 @@ class MondayAssistant:
 
     async def _instructions(self, caller_key: str) -> str:
         caller = self.directory.get(caller_key)
-        team = "; ".join(
-            f"{p.name_ar} = {p.name_en}" + (f" (also {', '.join(p.aliases)})" if p.aliases else "")
-            for p in self.directory
-        )
+        names = {str(u["id"]): u["name"] for u in await self.tools.users()}
+        lines = []
+        for p in self.directory:
+            line = f"- {p.name_ar} = {p.name_en}"
+            if p.aliases:
+                line += f" (also {', '.join(p.aliases)})"
+            uid = self.monday_users.get(p.key)
+            if uid:
+                line += f": on Monday «{names.get(str(uid), '?')}» (user id {uid})"
+            lines.append(line)
+        team = "\n".join(lines)
         today = today_in_cairo()
         return INSTRUCTIONS.format(
             caller=f"{caller.name_en} ({caller.name_ar})" if caller else "A team member",

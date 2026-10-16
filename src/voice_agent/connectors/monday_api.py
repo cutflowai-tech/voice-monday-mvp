@@ -26,6 +26,8 @@ mutations, so a misheard sentence can at worst archive an item, never destroy da
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import datetime as dt
 import json
 import re
 import time
@@ -33,6 +35,7 @@ from typing import Any, ClassVar
 
 import httpx
 
+from voice_agent.domain.dates import today_in_cairo
 from voice_agent.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -40,9 +43,17 @@ log = get_logger(__name__)
 RESULT_LIMIT = 24_000  # characters of tool output handed back to the LLM
 MAP_TTL_SECONDS = 300  # boards and users are re-read every 5 minutes
 # Status texts (any column) or group titles that mean an item is finished
-CLOSED = {"done", "resolved", "completed", "complete", "closed", "finished", "تم", "خلصت"}
-SEARCH_BOARDS = 60  # most recently used boards searched by search_items
-SEARCH_CONCURRENCY = 6
+CLOSED = {
+    "done", "resolved", "completed", "complete", "closed", "finished", "sent", "delivered",
+    "cancelled", "canceled", "تم", "خلصت",
+}  # fmt: skip
+SEARCH_BOARDS = 60
+DATE_TYPES = {"timeline", "date", "timerange"}
+NOT_DEADLINES = ("submitted", "created", "received", "start", "added", "receiving")
+ITEMS_TTL_SECONDS = 120  # board items for person_items (refreshed every minute)
+MAX_BOARD_ITEMS = 3000
+PERSON_RESULT_LIMIT = 30  # most recently used boards searched by search_items
+SEARCH_CONCURRENCY = 10
 
 # Mutations the escape hatch never runs: deletions, account and permission changes.
 BLOCKED_MUTATION = re.compile(
@@ -140,6 +151,16 @@ class MondayTools:
             ),
         },
         {
+            "name": "person_items",
+            "description": (
+                "A person's OPEN items on all boards at once: finished ones dropped, late "
+                "and due-today worked out (late_days, due_today, and the counts), sorted with "
+                "the oldest deadline first. Use it for «إيه اللي عند أحمد؟», «إيه اللي متأخر "
+                "عند مايكل؟». person: their Monday name from the team list."
+            ),
+            "parameters": _obj({"person": {"type": "string"}}, ["person"]),
+        },
+        {
             "name": "search_items",
             "description": (
                 "Find items by part of their name across all boards (when you don't know "
@@ -209,11 +230,13 @@ class MondayTools:
         },
     ]
 
-    def __init__(self, api: MondayAPI, *, clock=time.monotonic):
+    def __init__(self, api: MondayAPI, *, clock=time.monotonic, today=today_in_cairo):
         self.api = api
         self._clock = clock
+        self._today = today
         self._boards: tuple[float, list[dict]] | None = None
         self._users: tuple[float, list[dict]] | None = None
+        self._items: dict[str, tuple[float, list[dict]]] = {}
 
     # ------------------------------------------------------------------ workspace map
     async def boards(self, refresh: bool = False) -> list[dict]:
@@ -312,7 +335,7 @@ class MondayTools:
         params = {"rules": all_rules} if all_rules else None
         page = (
             "items_page(limit:$limit,query_params:$qp){cursor items{id name group{id title}"
-            " column_values{id text column{title}}}}"
+            " column_values{id text type column{title}}}}"
         )
         if group_id:
             query = (
@@ -338,13 +361,99 @@ class MondayTools:
                 return {"error": "group not found"}
             holder = groups[0]
         page_data = holder.get("items_page") or {}
-        items = [_item_summary(i) for i in page_data.get("items") or []]
+        raw = page_data.get("items") or []
         result: dict[str, Any] = {"more": bool(page_data.get("cursor"))}
         if open_only:
-            result["finished_skipped"] = len(items)
-            items = [i for i in items if not _finished(i)]
-            result["finished_skipped"] -= len(items)
+            open_raw = [i for i in raw if not _finished(i)]
+            result["finished_skipped"] = len(raw) - len(open_raw)
+            raw = open_raw
+        items = [_item_summary(i) for i in raw]
         return {"count": len(items), **result, "items": items}
+
+    async def _t_person_items(self, person: str) -> dict:
+        today = self._today()
+        boards = [b for b in await self.boards() if b.get("items")][:SEARCH_BOARDS]
+        gate = asyncio.Semaphore(SEARCH_CONCURRENCY)
+
+        async def one(board: dict) -> list[dict]:
+            async with gate:
+                try:
+                    raw = await self.board_items(board)
+                except MondayAPIError:
+                    return []
+            found = []
+            for item in raw:
+                if _finished(item) or not _assigned_to(item, person):
+                    continue
+                end = _due(item)
+                entry = {
+                    "board": board["name"],
+                    "name": item["name"],
+                    "status": _status_text(item),
+                    "due": end.isoformat() if end else None,
+                }
+                if end and end < today:
+                    entry["late_days"] = (today - end).days
+                elif end == today:
+                    entry["due_today"] = True
+                found.append(entry)
+            return found
+
+        items = [i for found in await asyncio.gather(*map(one, boards)) for i in found]
+        items.sort(key=lambda i: (i["due"] is None, i["due"] or ""))
+        return {
+            "person": person,
+            "today": today.isoformat(),
+            "count": len(items),
+            "late": sum("late_days" in i for i in items),
+            "due_today": sum(bool(i.get("due_today")) for i in items),
+            "items": items[:PERSON_RESULT_LIMIT],
+        }
+
+    async def board_items(self, board: dict, *, refresh: bool = False) -> list[dict]:
+        """All items of a board with only status/people/dropdown/date columns, cached for
+        ITEMS_TTL_SECONDS (kept warm in the background, dropped after our own changes)."""
+        cached = self._items.get(board["id"])
+        if not refresh and cached and self._clock() - cached[0] < ITEMS_TTL_SECONDS:
+            return cached[1]
+        fields = (
+            "cursor items{id name group{id title} column_values(types:[status,people,"
+            "dropdown,date,timeline]){id text type column{title}}}"
+        )
+        data = await self.api.run(
+            f"query($id:[ID!]){{boards(ids:$id){{items_page(limit:500){{{fields}}}}}}}",
+            {"id": [board["id"]]},
+        )
+        boards = data.get("boards") or []
+        page = (boards[0].get("items_page") or {}) if boards else {}
+        items = list(page.get("items") or [])
+        while page.get("cursor") and len(items) < MAX_BOARD_ITEMS:
+            data = await self.api.run(
+                f"query($c:String!){{next_items_page(limit:500,cursor:$c){{{fields}}}}}",
+                {"c": page["cursor"]},
+            )
+            page = data.get("next_items_page") or {}
+            items += page.get("items") or []
+        self._items[board["id"]] = (self._clock(), items)
+        return items
+
+    async def refresh_items(self) -> None:
+        """Re-read every board (background warmer)."""
+        boards = [b for b in await self.boards() if b.get("items")][:SEARCH_BOARDS]
+        gate = asyncio.Semaphore(SEARCH_CONCURRENCY)
+
+        async def one(board: dict) -> None:
+            async with gate:
+                with contextlib.suppress(MondayAPIError):
+                    await self.board_items(board, refresh=True)
+
+        await asyncio.gather(*map(one, boards))
+
+    def forget_items(self, board_id: str | None = None) -> None:
+        if board_id is None:
+            self._items.clear()
+        else:
+            self._items.pop(str(board_id), None)
 
     async def _t_search_items(self, text: str) -> dict:
         boards = [b for b in await self.boards() if b.get("items")][:SEARCH_BOARDS]
@@ -389,6 +498,7 @@ class MondayTools:
             "item_id:$i,column_values:$v,create_labels_if_missing:false){id name}}",
             {"b": str(board_id), "i": str(item_id), "v": json.dumps(values, ensure_ascii=False)},
         )
+        self.forget_items(board_id)
         log.info("monday_tools.update_item", board_id=board_id, item_id=item_id)
         return {"updated": data.get("change_multiple_column_values")}
 
@@ -405,6 +515,7 @@ class MondayTools:
                 "v": json.dumps(values, ensure_ascii=False) if values else None,
             },
         )
+        self.forget_items(board_id)
         log.info("monday_tools.create_item", board_id=board_id)
         return {"created": data.get("create_item")}
 
@@ -420,12 +531,14 @@ class MondayTools:
             "mutation($i:ID!,$g:String!){move_item_to_group(item_id:$i,group_id:$g){id}}",
             {"i": str(item_id), "g": group_id},
         )
+        self.forget_items()
         return {"moved": data.get("move_item_to_group")}
 
     async def _t_archive_item(self, item_id: str) -> dict:
         data = await self.api.run(
             "mutation($i:ID!){archive_item(item_id:$i){id}}", {"i": str(item_id)}
         )
+        self.forget_items()
         log.info("monday_tools.archive_item", item_id=item_id)
         return {"archived": data.get("archive_item")}
 
@@ -433,6 +546,8 @@ class MondayTools:
         reason = blocked_reason(query)
         if reason:
             return {"error": reason}
+        if re.search(r"\bmutation\b", query):
+            self.forget_items()
         return await self.api.run(query, variables)
 
 
@@ -487,8 +602,60 @@ def _columns(values: list[dict]) -> dict[str, str]:
 
 
 def _finished(item: dict) -> bool:
-    texts = [*item["columns"].values(), item.get("group") or ""]
-    return any(str(t).strip().lower() in CLOSED for t in texts)
+    """Done by its main status column; by its group only when it has no status."""
+    status = _main_status(item)
+    if status:
+        return status.strip().lower() in CLOSED
+    return ((item.get("group") or {}).get("title") or "").strip().lower() in CLOSED
+
+
+def _main_status(item: dict) -> str:
+    """The text of the column called "Status", else of the first non-priority status."""
+    statuses = [
+        v for v in item.get("column_values") or [] if v.get("type") == "status" and v.get("text")
+    ]
+    for v in statuses:
+        if ((v.get("column") or {}).get("title") or "").strip().lower() == "status":
+            return v["text"]
+    for v in statuses:
+        if "priority" not in ((v.get("column") or {}).get("title") or "").lower():
+            return v["text"]
+    return ""
+
+
+def _due(item: dict) -> dt.date | None:
+    """The end of the item's first deadline-like timeline or date column (not "Date
+    Submitted", "Created"…)."""
+    for v in item.get("column_values") or []:
+        title = ((v.get("column") or {}).get("title") or "").lower()
+        if any(word in title for word in NOT_DEADLINES):
+            continue
+        if v.get("type") in DATE_TYPES and v.get("text"):
+            found = re.findall(r"\d{4}-\d{2}-\d{2}", v["text"])
+            if found:
+                return dt.date.fromisoformat(found[-1])
+    return None
+
+
+def _assigned_to(item: dict, person: str) -> bool:
+    """The person is in the item's people column; a dropdown (e.g. "Editor Name", or the
+    assignee dropdown of Request tasks) counts only when no people column is filled."""
+    words = [w for w in person.lower().split() if len(w) > 1]
+    first = words[0] if words else person.lower()
+
+    def named(text: str) -> bool:
+        names = [n.strip().lower() for n in text.split(",")]
+        return any(n == person.lower() or n.split(" ")[0] == first for n in names if n)
+
+    values = [v for v in item.get("column_values") or [] if v.get("text")]
+    people = [v for v in values if v.get("type") in ("people", "multiple-person")]
+    if people:
+        return any(named(v["text"]) for v in people)
+    return any(named(v["text"]) for v in values if v.get("type") == "dropdown")
+
+
+def _status_text(item: dict) -> str:
+    return _main_status(item) or (item.get("group") or {}).get("title") or ""
 
 
 def _item_summary(item: dict) -> dict:
