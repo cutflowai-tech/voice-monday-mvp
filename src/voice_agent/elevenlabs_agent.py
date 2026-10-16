@@ -33,6 +33,7 @@ from typing import Any
 import httpx
 
 from voice_agent.config import Settings
+from voice_agent.domain.boards import BoardDirectory
 from voice_agent.domain.people import PeopleDirectory, Person
 from voice_agent.sarah import (
     ACK_HINTS,
@@ -65,6 +66,7 @@ def build_tools(
     people: list[Person],
     secret_id: str,
     callable_people: list[Person] | None = None,
+    boards: BoardDirectory | None = None,
 ) -> dict[str, dict]:
     base = settings.agent_public_url.rstrip("/")
     headers = {"Authorization": {"secret_id": secret_id}}
@@ -115,6 +117,23 @@ def build_tools(
                             "task you just repeated."
                         ),
                     },
+                    **(
+                        {
+                            "board": {
+                                "type": "string",
+                                "enum": ["auto", *boards.board_keys()],
+                                "description": (
+                                    "auto unless the caller named a board or answered which "
+                                    "board: "
+                                    + "، ".join(
+                                        f"{k} = {boards.name_ar(k)}" for k in boards.board_keys()
+                                    )
+                                ),
+                            }
+                        }
+                        if boards is not None and len(boards.board_keys()) > 1
+                        else {}
+                    ),
                 },
             },
         },
@@ -219,7 +238,12 @@ def asr_keywords(people: list[Person]) -> list[str]:
     return sorted(words | {"تاسك", "Monday", "مانداي"})
 
 
-def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -> dict:
+def build_agent(
+    settings: Settings,
+    people: list[Person],
+    tool_ids: list[str],
+    boards: BoardDirectory | None = None,
+) -> dict:
     return {
         "name": f"{NAME_EN} ({NAME_AR}) - Waset Co task line",
         "tags": ["voice-monday", "sarah"],
@@ -243,6 +267,7 @@ def build_agent(settings: Settings, people: list[Person], tool_ids: list[str]) -
                 "prompt": {
                     "prompt": build_prompt(
                         people,
+                        boards=boards,
                         expressive=settings.elevenlabs_agent_tts_model.startswith("eleven_v3"),
                     ),
                     "llm": settings.elevenlabs_agent_llm,
@@ -372,8 +397,13 @@ class ElevenLabsAgentSync:
             state["secret_id"] = secret["secret_id"]
             self._save(state)
 
+        boards = BoardDirectory.load(self.s.monday_boards_file or None)
         tools = build_tools(
-            self.s, people, state["secret_id"], callable_people=self.callable_people(directory)
+            self.s,
+            people,
+            state["secret_id"],
+            callable_people=self.callable_people(directory),
+            boards=boards,
         )
         tool_ids = state.setdefault("tool_ids", {})
         for name, config in tools.items():
@@ -386,7 +416,7 @@ class ElevenLabsAgentSync:
                 tool_ids[name] = created["id"]
                 self._save(state)
 
-        agent_body = build_agent(self.s, people, [tool_ids[n] for n in tools])
+        agent_body = build_agent(self.s, people, [tool_ids[n] for n in tools], boards)
         agent_id = state.get("agent_id") or self.s.elevenlabs_agent_id
         if agent_id:
             await self._call("PATCH", f"/v1/convai/agents/{agent_id}", agent_body)

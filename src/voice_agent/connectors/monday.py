@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 from abc import abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -116,15 +116,40 @@ class MondayConfig:
     timeout_seconds: float = 10.0
 
 
+@dataclass(frozen=True)
+class BoardTarget:
+    """An extra board (beyond the default one in ``MondayConfig``) a task can go to."""
+
+    board_id: str
+    group_id: str
+    assignee_column: str
+    assignee_column_type: str  # "people" (user ids) or "dropdown" (option ids)
+    person_ids: dict[str, int]
+    values: dict[str, Any] = field(default_factory=dict)  # fixed values, e.g. status index
+    timeline_column: str = ""  # set from the task's due date when there is one
+
+
 class MondayConnector(Connector):
     """Monday-specific connector contract (real and mock implementations)."""
 
     name = "monday"
     operations = frozenset({CREATE_TASK})
 
-    def __init__(self, person_ids: dict[str, int], requester_ids: dict[str, int] | None = None):
+    def __init__(
+        self,
+        person_ids: dict[str, int],
+        requester_ids: dict[str, int] | None = None,
+        boards: dict[str, BoardTarget] | None = None,
+    ):
         self.person_ids = dict(person_ids)
         self.requester_ids = dict(requester_ids or {})
+        self.boards = dict(boards or {})  # extra boards by key; no key = default board
+
+    def ids_for(self, board: str | None) -> dict[str, int]:
+        """Person ids for an extra board; anything else is the default board."""
+        if board and board in self.boards:
+            return self.boards[board].person_ids
+        return self.person_ids
 
     def validate(self, operation: str, payload: dict[str, Any]) -> list[ValidationIssue]:
         issues = super().validate(operation, payload)
@@ -135,13 +160,16 @@ class MondayConnector(Connector):
             issues.append(ValidationIssue("task", "missing", "task title is empty"))
         elif len(title) > MAX_ITEM_NAME:
             issues.append(ValidationIssue("task", "too_long", "task title exceeds 255 chars"))
+        board = payload.get("board")
+        ids = self.ids_for(board)
         key = payload.get("assignee_key")
-        if not key or key not in self.person_ids:
+        if not key or key not in ids:
+            where = f" on board {board!r}" if board else ""
             issues.append(
                 ValidationIssue(
                     "assignee",
                     "unknown_person",
-                    f"no MONDAY_<NAME>_PERSON_ID configured for {payload.get('assignee')!r}",
+                    f"no Monday id configured for {payload.get('assignee')!r}{where}",
                 )
             )
         return issues
@@ -152,16 +180,26 @@ class MondayConnector(Connector):
         issues = self.validate(operation, payload)
         if issues:
             raise PermanentConnectorError("; ".join(i.message for i in issues), code="validation")
+        board = payload.get("board")
         return await self.create_task(
             title=payload["title"].strip(),
-            person_id=self.person_ids[payload["assignee_key"]],
+            person_id=self.ids_for(board)[payload["assignee_key"]],
             ctx=ctx,
             requester_id=self.requester_ids.get(payload.get("requester_key")),
+            board=board if board in self.boards else None,
+            due=payload.get("due"),
         )
 
     @abstractmethod
     async def create_task(
-        self, *, title: str, person_id: int, ctx: ExecutionContext, requester_id: int | None = None
+        self,
+        *,
+        title: str,
+        person_id: int,
+        ctx: ExecutionContext,
+        requester_id: int | None = None,
+        board: str | None = None,
+        due: str | None = None,
     ) -> ConnectorResult: ...
 
 
@@ -172,9 +210,10 @@ class MondayGraphQLConnector(MondayConnector):
         person_ids: dict[str, int],
         requester_ids: dict[str, int] | None = None,
         *,
+        boards: dict[str, BoardTarget] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
-        super().__init__(person_ids, requester_ids)
+        super().__init__(person_ids, requester_ids, boards)
         self.config = config
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(config.timeout_seconds, connect=5.0),
@@ -183,13 +222,27 @@ class MondayGraphQLConnector(MondayConnector):
 
     # ------------------------------------------------------------------ requests
     def column_values(
-        self, *, title: str, person_id: int, idempotency_key: str, requester_id: int | None = None
+        self,
+        *,
+        title: str,
+        person_id: int,
+        idempotency_key: str,
+        requester_id: int | None = None,
+        board: str | None = None,
+        due: str | None = None,
     ) -> dict:
-        if self.config.assignee_column_type == "dropdown":
+        target = self.boards.get(board) if board else None
+        assignee_type = target.assignee_column_type if target else self.config.assignee_column_type
+        if assignee_type == "dropdown":
             assignee: dict[str, Any] = {"ids": [person_id]}
         else:
             assignee = {"personsAndTeams": [{"id": person_id, "kind": "person"}]}
-        values: dict[str, Any] = {self.config.assignee_column: assignee}
+        if target is not None:
+            values: dict[str, Any] = {target.assignee_column: assignee, **target.values}
+            if target.timeline_column and due:
+                values[target.timeline_column] = {"from": due, "to": due}
+            return values
+        values = {self.config.assignee_column: assignee}
         if self.config.task_name_column and self.config.task_name_column != "name":
             values[self.config.task_name_column] = title
         if self.config.idempotency_column:
@@ -201,15 +254,23 @@ class MondayGraphQLConnector(MondayConnector):
         return values
 
     def build_create_request(
-        self, *, title: str, person_id: int, idempotency_key: str, requester_id: int | None = None
+        self,
+        *,
+        title: str,
+        person_id: int,
+        idempotency_key: str,
+        requester_id: int | None = None,
+        board: str | None = None,
+        due: str | None = None,
     ) -> tuple[dict[str, str], dict[str, Any]]:
+        target = self.boards.get(board) if board else None
         headers = self._headers()
         headers["Idempotency-Key"] = idempotency_key
         body = {
             "query": CREATE_ITEM_MUTATION,
             "variables": {
-                "boardId": self.config.board_id,
-                "groupId": self.config.group_id,
+                "boardId": target.board_id if target else self.config.board_id,
+                "groupId": target.group_id if target else self.config.group_id,
                 "itemName": title[:MAX_ITEM_NAME],
                 "columnValues": json.dumps(
                     self.column_values(
@@ -217,6 +278,8 @@ class MondayGraphQLConnector(MondayConnector):
                         person_id=person_id,
                         idempotency_key=idempotency_key,
                         requester_id=requester_id,
+                        board=board,
+                        due=due,
                     ),
                     ensure_ascii=False,
                 ),
@@ -233,9 +296,16 @@ class MondayGraphQLConnector(MondayConnector):
 
     # ------------------------------------------------------------------ operations
     async def create_task(
-        self, *, title: str, person_id: int, ctx: ExecutionContext, requester_id: int | None = None
+        self,
+        *,
+        title: str,
+        person_id: int,
+        ctx: ExecutionContext,
+        requester_id: int | None = None,
+        board: str | None = None,
+        due: str | None = None,
     ) -> ConnectorResult:
-        if ctx.prior_attempt_uncertain and self.config.idempotency_column:
+        if ctx.prior_attempt_uncertain and self.config.idempotency_column and not board:
             existing = await self.find_by_key(ctx.idempotency_key)
             if existing:
                 log.info("monday.item_already_exists", job_id=ctx.job_id, item_id=existing["id"])
@@ -246,6 +316,8 @@ class MondayGraphQLConnector(MondayConnector):
             person_id=person_id,
             idempotency_key=ctx.idempotency_key,
             requester_id=requester_id,
+            board=board,
+            due=due,
         )
         response, data = await self._post(headers, body, mutation=True)
         item = (data or {}).get("create_item")
@@ -371,21 +443,36 @@ class MondayGraphQLConnector(MondayConnector):
 class MockMondayConnector(MondayConnector):
     """In-memory Monday used by the simulator and tests. Honors idempotency keys."""
 
-    def __init__(self, person_ids: dict[str, int], *, fail_times: int = 0):
-        super().__init__(person_ids)
+    def __init__(
+        self,
+        person_ids: dict[str, int],
+        *,
+        fail_times: int = 0,
+        boards: dict[str, BoardTarget] | None = None,
+    ):
+        super().__init__(person_ids, boards=boards)
         self.fail_times = fail_times
         self.items: dict[str, dict[str, Any]] = {}
         self.calls: list[dict[str, Any]] = []
         self._next_id = 9_000_000_001
 
     async def create_task(
-        self, *, title: str, person_id: int, ctx: ExecutionContext, requester_id: int | None = None
+        self,
+        *,
+        title: str,
+        person_id: int,
+        ctx: ExecutionContext,
+        requester_id: int | None = None,
+        board: str | None = None,
+        due: str | None = None,
     ) -> ConnectorResult:
         self.calls.append(
             {
                 "title": title,
                 "person_id": person_id,
                 "requester_id": requester_id,
+                "board": board,
+                "due": due,
                 "key": ctx.idempotency_key,
                 "attempt": ctx.attempt,
             }

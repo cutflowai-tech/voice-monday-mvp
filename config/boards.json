@@ -1,0 +1,39 @@
+{
+  "default": "requests",
+  "boards": {
+    "requests": {
+      "name_ar": "الريكويستس",
+      "name_en": "Request tasks"
+    },
+    "account_managers": {
+      "name_ar": "الأكاونت مانجرز",
+      "name_en": "Account Managers Tasks",
+      "board_id": "5098517650",
+      "group_id": "group_mm2qmjvq",
+      "assignee_column": "multiple_person_mm33zmm3",
+      "assignee_column_type": "people",
+      "values": {"color_mm2qe34s": {"index": 2}, "status": {"index": 3}},
+      "timeline_column": "timerange_mm2qg82"
+    },
+    "senior_account_managers": {
+      "name_ar": "السينيور أكاونت مانجرز",
+      "name_en": "Senior Account Managers Tasks",
+      "board_id": "5106176269",
+      "group_id": "group_mm2qmjvq",
+      "assignee_column": "multiple_person_mm33zmm3",
+      "assignee_column_type": "people",
+      "values": {"color_mm2qe34s": {"index": 2}, "status": {"index": 3}},
+      "timeline_column": "timerange_mm2qg82"
+    }
+  },
+  "monday_users": {
+    "mohamed": 104901271,
+    "michael": 99154857,
+    "amir": 99988743,
+    "ziad": 105392408,
+    "ahmed": 103082849
+  },
+  "home_board": {
+    "amir": "ask"
+  }
+}

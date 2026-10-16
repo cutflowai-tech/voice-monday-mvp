@@ -74,6 +74,29 @@ The agent is **Sarah (سارة)**, the team's task-line assistant. Her identity 
   `EL_BRIDGE_TYPING_VOLUME` (0 = off, 1 = normal, up to 3).
 - **Temperature:** 0.6 for variety; people and tool arguments are still fixed by enums.
 
+## Boards (Request tasks, Account Managers, Senior Account Managers)
+
+`config/boards.json` (enabled with `MONDAY_BOARDS_FILE=config/boards.json`) lists the boards
+Sarah can use:
+
+| Key | Board | Assign column | Extra columns set |
+|---|---|---|---|
+| `requests` (usual) | Request tasks (`MONDAY_BOARD_ID`) | dropdown (`MONDAY_<NAME>_PERSON_ID`) | Task From |
+| `account_managers` | Account Managers Tasks `5098517650` | People (`monday_users`) | Status = Ready To Start, Priority = Medium, Timeline |
+| `senior_account_managers` | Senior Account Managers Tasks `5106176269` | People | the same |
+
+How a board is chosen:
+- **Board named:** if the caller names one («على بورد الأكاونت مانجرز»), the task goes there.
+- **Home board:** otherwise it goes to the person's home board (`home_board`; Request tasks
+  by default).
+- **"ask":** a person marked "ask" (Amir) gets the question «أحطها لأمير على أنهي بورد؟»
+  first. The server enforces this: `submit_task` with `board=auto` for Amir returns
+  `need_board` and saves nothing.
+
+New tasks on the Account Managers boards go to the **Ready To Start** group. The Timeline
+comes from the task's words (بكرة، بعد بكرة، النهارده، يوم الخميس…, in Cairo time), or
+today. People columns need Monday *user* ids (`monday_users`); Mohamed is Mohamed Mohsen.
+
 ## Sarah calls people (prank mode)
 
 On a normal call you can ask «اتصلي بأحمد واعملي فيه مقلب». What happens:

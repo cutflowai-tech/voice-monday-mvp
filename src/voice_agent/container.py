@@ -15,6 +15,7 @@ from voice_agent.commands.create_task import CreateTaskHandler
 from voice_agent.config import Settings
 from voice_agent.connectors.base import ConnectorRegistry
 from voice_agent.connectors.monday import (
+    BoardTarget,
     MockMondayConnector,
     MondayConfig,
     MondayGraphQLConnector,
@@ -23,6 +24,7 @@ from voice_agent.conversation.agent import StructuredTaskAgent
 from voice_agent.conversation.engine import ConversationEngine
 from voice_agent.conversation.session_log import SessionLog
 from voice_agent.db import Database
+from voice_agent.domain.boards import BoardDirectory
 from voice_agent.domain.callers import CallerDirectory
 from voice_agent.domain.people import PeopleDirectory
 from voice_agent.jobs.queue import JobQueue, RedisJobQueue
@@ -43,6 +45,7 @@ class Container:
     jobs: JobService
     directory: PeopleDirectory
     callers: CallerDirectory
+    boards: BoardDirectory
     parser: IntentParser
     acks: AcknowledgmentGenerator
     commands: CommandRegistry
@@ -57,8 +60,35 @@ class Container:
         await self.queue.close()
 
 
-def build_connectors(settings: Settings, directory: PeopleDirectory) -> ConnectorRegistry:
+def board_targets(
+    boards: BoardDirectory, default_ids: dict[str, int], *, mock: bool = False
+) -> dict[str, BoardTarget]:
+    """Monday settings for every extra board; People columns use Monday user ids."""
+    targets = {}
+    for key, spec in boards.extra().items():
+        if mock:
+            ids = default_ids
+        elif spec.assignee_column_type == "people":
+            ids = boards.monday_users
+        else:
+            ids = default_ids
+        targets[key] = BoardTarget(
+            board_id=str(spec.board_id),
+            group_id=spec.group_id,
+            assignee_column=spec.assignee_column,
+            assignee_column_type=spec.assignee_column_type,
+            person_ids=dict(ids),
+            values=dict(spec.values),
+            timeline_column=spec.timeline_column,
+        )
+    return targets
+
+
+def build_connectors(
+    settings: Settings, directory: PeopleDirectory, boards: BoardDirectory | None = None
+) -> ConnectorRegistry:
     registry = ConnectorRegistry()
+    boards = boards or BoardDirectory.load(settings.monday_boards_file or None)
     person_ids = settings.monday_person_ids()
     if settings.monday_mode == "live":
         config = MondayConfig(
@@ -76,14 +106,21 @@ def build_connectors(settings: Settings, directory: PeopleDirectory) -> Connecto
         )
         registry.register(
             MondayGraphQLConnector(
-                config, person_ids, requester_ids=settings.monday_requester_ids()
+                config,
+                person_ids,
+                requester_ids=settings.monday_requester_ids(),
+                boards=board_targets(boards, person_ids),
             )
         )
     else:
         # Mock mode: every directory person gets a fake id unless a real one is set.
-        fake_ids = {p.key: 50_000_000 + i for i, p in enumerate(directory)}
+        fake_ids = {p.key: 50_000_000 + i for i, p in enumerate(directory)} | person_ids
         registry.register(
-            MockMondayConnector(fake_ids | person_ids, fail_times=settings.mock_monday_fail_times)
+            MockMondayConnector(
+                fake_ids,
+                fail_times=settings.mock_monday_fail_times,
+                boards=board_targets(boards, fake_ids, mock=True),
+            )
         )
     # Future connectors (WhatsApp, email, calendar, CRM, ...) are registered here.
     return registry
@@ -117,7 +154,8 @@ def build_container(
     parser = parser or EgyptianArabicParser(directory)
     acks = acks or TemplateAcknowledgmentGenerator()
     commands = build_commands(settings)
-    connectors = connectors or build_connectors(settings, directory)
+    boards = BoardDirectory.load(settings.monday_boards_file or None)
+    connectors = connectors or build_connectors(settings, directory, boards)
     agent = (
         StructuredTaskAgent(
             api_key=settings.agent_api_key,
@@ -149,6 +187,7 @@ def build_container(
         jobs=jobs,
         directory=directory,
         callers=callers,
+        boards=boards,
         parser=parser,
         acks=acks,
         commands=commands,

@@ -23,6 +23,8 @@ from typing import Any, Literal
 
 from voice_agent.agent_tools.task_text import normalize_task
 from voice_agent.container import Container
+from voice_agent.domain.boards import ASK, AUTO
+from voice_agent.domain.dates import due_date, today_in_cairo
 from voice_agent.domain.intents import Action, Intent, IntentDetails
 from voice_agent.jobs.models import JobStatus
 from voice_agent.logging_setup import get_logger
@@ -41,6 +43,7 @@ class Draft:
     task: str
     caller_id: str | None
     created_at: float
+    board: str = ""  # resolved board key ("" = the default board)
     state: DraftState = "waiting"
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     result: asyncio.Future[dict[str, Any]] | None = None
@@ -86,15 +89,28 @@ class TaskWindow:
         task: str,
         mode: Mode = "new",
         caller_id: str | None = None,
+        board: str = AUTO,
     ) -> dict[str, Any]:
         task = " ".join(task.split())
-        problem = self._validate(assignee_key, task)
+        boards = self.c.boards
+        board = boards.resolve(assignee_key, board)
+        if board == ASK:  # e.g. Amir: the caller must say which board
+            person = self.c.directory.get(assignee_key)
+            log.info("agent_tool.need_board", conversation_id=conversation_id, key=assignee_key)
+            return {
+                "status": "need_board",
+                "assignee": person.name_ar if person else assignee_key,
+                "options": [{"board": k, "name": boards.name_ar(k)} for k in boards.board_keys()],
+            }
+        if board not in boards.board_keys():
+            return {"status": "invalid", "problem": "unknown_board: ask which board"}
+        problem = self._validate(assignee_key, task, board)
         if problem:
             log.info("agent_tool.invalid", conversation_id=conversation_id, problem=problem)
             return {"status": "invalid", "problem": problem}
 
         conv = self._conversation(conversation_id)
-        key = _draft_key(conversation_id, assignee_key, task)
+        key = _draft_key(conversation_id, assignee_key, task, board)
         existing = next((d for d in conv.drafts if d.key == key), None)
         if existing and existing.state in ("waiting", "committed") and existing.result:
             log.info("agent_tool.joined", conversation_id=conversation_id, key=key)
@@ -113,6 +129,7 @@ class TaskWindow:
             task=task,
             caller_id=caller_id,
             created_at=time.monotonic(),
+            board=board,
         )
         draft.result = asyncio.get_running_loop().create_future()
         conv.drafts.append(draft)
@@ -153,7 +170,7 @@ class TaskWindow:
             await asyncio.wait(self._tasks, timeout=self.done_wait_seconds + 5)
 
     # ------------------------------------------------------------------ internals
-    def _validate(self, assignee_key: str, task: str) -> str | None:
+    def _validate(self, assignee_key: str, task: str, board: str = "") -> str | None:
         person = self.c.directory.get(assignee_key)
         if person is None:
             return "unknown_person: ask the caller who the task is for"
@@ -162,9 +179,14 @@ class TaskWindow:
         handler = self.c.commands.get(Action.CREATE_TASK)
         if handler is None:
             return "unsupported"
-        issues = handler.validate(self._intent(assignee_key, task), self.c.connectors)
+        spec = handler.build_job(self._intent(assignee_key, task))
+        spec.payload["board"] = board
+        if spec.connector not in self.c.connectors:
+            return "unsupported"
+        issues = self.c.connectors.get(spec.connector).validate(spec.operation, spec.payload)
         if issues:
-            return f"{issues[0].code}: {person.name_en} cannot receive Monday tasks yet"
+            where = f" on {self.c.boards.name_ar(board)}" if board else ""
+            return f"{issues[0].code}: {person.name_en} cannot receive Monday tasks{where} yet"
         return None
 
     def _intent(self, assignee_key: str, task: str) -> Intent:
@@ -241,9 +263,16 @@ class TaskWindow:
         intent = self._intent(draft.assignee_key, title)
         spec = handler.build_job(intent)
         spec.payload["requester_key"] = requester_key
+        spec.payload["board"] = draft.board
+        board_spec = self.c.boards.boards.get(draft.board)
+        due = None
+        if board_spec is not None and board_spec.timeline_column:
+            due = (due_date(draft.task) or today_in_cairo()).isoformat()
+            spec.payload["due"] = due
         metadata = intent.public_dict()
         metadata["requester"] = {"person_key": requester_key, "caller_number": draft.caller_id}
         metadata["source"] = "elevenlabs_agent"
+        metadata["board"] = draft.board
         job, _ = await self.c.jobs.submit(
             spec,
             idempotency_key=draft.key,
@@ -255,7 +284,13 @@ class TaskWindow:
         log.info("agent_tool.committed", conversation_id=conversation_id, job_id=job.id)
         job = await self._wait_for_result(job.id) or job
         person = self.c.directory.get(draft.assignee_key)
-        base = {"assignee": person.name_ar if person else draft.assignee_key, "task": title}
+        base = {
+            "assignee": person.name_ar if person else draft.assignee_key,
+            "task": title,
+            "board": self.c.boards.name_ar(draft.board),
+        }
+        if due:
+            base["due"] = due
         if job.status is JobStatus.COMPLETED:
             status = "created"
         elif job.status in (JobStatus.FAILED, JobStatus.DEAD_LETTER):
@@ -305,9 +340,9 @@ class TaskWindow:
         return conv
 
 
-def _draft_key(conversation_id: str, assignee_key: str, task: str) -> str:
-    """Same conversation + person + words = same draft (webhook retries, double calls)."""
+def _draft_key(conversation_id: str, assignee_key: str, task: str, board: str = "") -> str:
+    """Same conversation + person + words + board = same draft (retries, double calls)."""
     digest = hashlib.sha256(
-        f"{conversation_id}|{assignee_key}|{normalize_text(task)}".encode()
+        f"{conversation_id}|{assignee_key}|{normalize_text(task)}|{board}".encode()
     ).hexdigest()
     return f"el_{digest[:32]}"

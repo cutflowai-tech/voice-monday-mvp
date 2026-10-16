@@ -278,8 +278,12 @@ def cmd_el_agent(args: argparse.Namespace, settings: Settings) -> int:
     directory = PeopleDirectory.load(settings.people_directory_file or None)
     if args.dry_run:
         people = assignable_people(settings, directory)
-        tools = build_tools(settings, people, "<secret_id>")
-        _print_json({"tools": tools, "agent": build_agent(settings, people, ["<tool ids>"])})
+        from voice_agent.domain.boards import BoardDirectory
+
+        boards = BoardDirectory.load(settings.monday_boards_file or None)
+        tools = build_tools(settings, people, "<secret_id>", boards=boards)
+        agent = build_agent(settings, people, ["<tool ids>"], boards)
+        _print_json({"tools": tools, "agent": agent})
         return 0
     problems = missing_settings(settings)
     if problems:

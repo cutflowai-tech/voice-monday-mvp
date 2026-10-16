@@ -82,6 +82,8 @@ class Settings(BaseSettings):
     monday_assignee_column_type: Literal["people", "dropdown"] = "people"
     monday_idempotency_column: str = ""
     monday_requester_column: str = ""
+    # extra boards and per-person home boards (config/boards.json); empty = default board only
+    monday_boards_file: str = ""
     monday_timeout_seconds: float = 10.0
     mock_monday_fail_times: int = Field(default=0, ge=0)
 

@@ -157,7 +157,7 @@ name naturally now and then (not every sentence), e.g. «حاضر يا {{caller_
 Start your first repeat in the style «{{ack_hint}}» and your first confirmation like
 «{{done_hint}}» (fill in the person and the task). After that, keep varying.
 
-# Team: assign tasks only to these keys
+{boards}# Team: assign tasks only to these keys
 {people}
 
 # Taking a task
@@ -263,10 +263,41 @@ EXPRESSIONS_WORDS = """\
 TAG = re.compile(r"\[[a-z ]+\]\s*")
 
 
-def build_prompt(people: list[Person], *, expressive: bool = True) -> str:
+def boards_section(boards, people: list[Person]) -> str:
+    """Prompt text for choosing a Monday board (empty when there is only one board)."""
+    if boards is None or len(boards.board_keys()) < 2:
+        return ""
+    names = {p.key: p.name_ar for p in people}
+    lines = [
+        f"- {k}: «{boards.name_ar(k)}»" + (" (the usual one)" if k == boards.default else "")
+        for k in boards.board_keys()
+    ]
+    ask = [names.get(k, k) for k, home in boards.home_board.items() if home == "ask"]
+    choices = " ولا ".join(boards.name_ar(k) for k in boards.board_keys())
+    text = (
+        "# Boards\n"
+        'Every task goes to a Monday board. Send board "auto" unless the caller names a board\n'
+        "or answers which board:\n" + "\n".join(lines) + "\n"
+    )
+    if ask:
+        text += (
+            f"For {'، '.join(ask)}: if the caller didn't name a board, ask BEFORE calling\n"
+            f"submit_task, e.g. «أحطها لـ{ask[0]} على أنهي بورد؟ {choices}؟», then call it with\n"
+            'the board they choose. If submit_task returns "need_board", ask the same question.\n'
+        )
+    text += (
+        "When the board isn't the usual one, say it when you repeat the task, e.g.\n"
+        f"«تمام، هحطها لزياد على بورد {boards.name_ar(boards.board_keys()[1])}».\n\n"
+    )
+    return text
+
+
+def build_prompt(people: list[Person], *, expressive: bool = True, boards=None) -> str:
     """``expressive``: the TTS model performs audio tags (eleven_v3*); otherwise the prompt
-    asks for feelings in words and the examples carry no tags."""
+    asks for feelings in words and the examples carry no tags. ``boards``: a
+    BoardDirectory; with more than one board the prompt explains how to pick one."""
     prompt = PROMPT.replace("{people}", team_lines(people))
+    prompt = prompt.replace("{boards}", boards_section(boards, people))
     if expressive:
         return prompt.replace("{expressions}", EXPRESSIONS_TAGS)
     prompt = prompt.replace("{expressions}", "@@EXPRESSIONS@@")
