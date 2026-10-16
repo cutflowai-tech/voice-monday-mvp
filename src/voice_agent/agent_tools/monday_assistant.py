@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import Any
 
@@ -61,7 +62,15 @@ dates, owners, names, updates/comments, moving items, creating items or groups, 
   today: use its counts as they are, never recount or redo the dates. «النهاردة» /
   «دلوقتي» in such a question means "currently": answer with the open count, then what's
   late and what's due today. For «متأخر» answer with the late ones.
-- Call get_board before filtering or changing a board, to get exact column ids and labels.
+- Counting or filtering ONE board («كام in progress؟», «إيه اللي ready for edit؟», «إيه
+  اللي pending على Request tasks؟») → find_items: it filters and counts exactly. Use its
+  numbers as they are; never count items yourself. Call it without filters to see which
+  status labels exist (by_status) when you're not sure of the label.
+- Callers use their own words for statuses. If the label they say doesn't exist, look at
+  by_status and use the closest one, saying which («مفيش pending، بس فيه أربعة Waiting
+  Approval»): pending ≈ Waiting Approval / Ready To Start / Not Started; شغالة ≈ In
+  Progress / Working on it; خلصت ≈ Done / Resolved / Sent; واقفة ≈ Stuck / Unresolved.
+- Call get_board before changing a board, to get exact column ids and labels.
 - Before saying "nothing found", double-check: read the items without filters, or look on
   the other likely boards. A filter that returns 0 is usually a wrong filter.
 - Before a change, be sure which item it is. If several items match, ask which one (name
@@ -76,19 +85,44 @@ dates, owners, names, updates/comments, moving items, creating items or groups, 
 # The team (as the caller names them → Monday)
 {team}
 
-# Your answer (spoken by Sarah)
-- Cairene Egyptian Arabic, like a colleague on the phone: «عند أحمد 3 تاسكات: الكاميرات،
+# Your answer (spoken by Sarah, word for word)
+- Cairene Egyptian Arabic, like a colleague on the phone: «عند أحمد تلات تاسكات: الكاميرات،
   والكهربائي، وتسليم الفيديو.» Never formal Arabic. No vowel marks.
-- SHORT: one or two sentences, under 35 words. The caller interrupts long answers. No
-  lists, bullets, markdown, emojis, ids, links or quotation marks.
+- SHORT: one or two sentences, under 35 words, even when asked for "everything". Never
+  lists, bullets, numbering, line breaks, markdown, emojis, ids, links or quotation marks.
+- Write every number in Egyptian words: «تلاتة»، «اتناشر»، «تسعة وتلاتين»، «مية وعشرين».
+- Name at most three items per answer, then ask «أكمل؟». Next time continue from where you
+  stopped.
 - Board, item and people names as they are written on Monday.
-- Many results: say how many and the two or three most important, then «أقولك الباقي؟».
 - Dates naturally («بكرة»، «يوم الخميس»، «16 أكتوبر»).
 - If you need something from the caller, end with one short question.
 
 # Map of the account
 {workspace}
 """
+
+
+MAX_SPOKEN_WORDS = 45
+
+
+def spoken(text: str) -> str:
+    """Make an answer safe to read aloud: no markdown, lists or line breaks, and short
+    (cut at a sentence end, then «أكمل؟»), whatever the model wrote."""
+    text = re.sub(r"[*#`_>|]+", "", text or "")
+    text = re.sub(r'["“”]', "", text)
+    lines = [
+        re.sub(r"^\s*(?:[-•–]|\d+[.)-]|[٠-٩]+[.)-])\s*", "", ln).strip() for ln in text.splitlines()
+    ]
+    lines = [ln.rstrip(":：") for ln in lines if ln]
+    text = "، ".join(lines)
+    text = re.sub(r"\s+", " ", text).replace("،،", "،").strip()
+    words = text.split()
+    if len(words) <= MAX_SPOKEN_WORDS:
+        return text
+    cut = " ".join(words[:MAX_SPOKEN_WORDS])
+    end = max(cut.rfind(mark) for mark in (".", "؟", "!", "?"))
+    cut = cut[: end + 1] if end > len(cut) // 3 else cut.rstrip("،, ") + "."
+    return f"{cut} أكمل؟"
 
 
 class MondayAssistant:
@@ -207,7 +241,7 @@ class MondayAssistant:
             message = await self._complete(messages, tools, final=final_step)
             calls = message.get("tool_calls") or []
             if not calls or final_step:
-                answer = (message.get("content") or "").strip()
+                answer = spoken(message.get("content") or "")
                 if not answer:
                     raise ValueError("empty answer")
                 new.append({"role": "assistant", "content": answer})

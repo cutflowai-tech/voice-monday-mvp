@@ -130,6 +130,27 @@ class MondayTools:
             "parameters": _obj({"board_id": _ID}, ["board_id"]),
         },
         {
+            "name": "find_items",
+            "description": (
+                "Count and list a board's items with filters done for you (exact numbers): "
+                'status (label text, e.g. "In Progress", "Ready for Edit", "Pending"), '
+                "group (title), person (Monday name), open_only, late_only. Always returns "
+                "total, by_status and by_group counts of the matching items. Use it for "
+                "«كام in progress؟», «إيه اللي ready for edit؟», «إيه اللي متأخر على البورد ده؟»."
+            ),
+            "parameters": _obj(
+                {
+                    "board_id": _ID,
+                    "status": {"type": "string"},
+                    "group": {"type": "string"},
+                    "person": {"type": "string"},
+                    "open_only": {"type": "boolean"},
+                    "late_only": {"type": "boolean"},
+                },
+                ["board_id"],
+            ),
+        },
+        {
             "name": "get_items",
             "description": (
                 "Items of one board with every column as text. open_only: true drops "
@@ -369,6 +390,56 @@ class MondayTools:
             raw = open_raw
         items = [_item_summary(i) for i in raw]
         return {"count": len(items), **result, "items": items}
+
+    async def _t_find_items(
+        self,
+        board_id: str,
+        status: str | None = None,
+        group: str | None = None,
+        person: str | None = None,
+        open_only: bool = False,
+        late_only: bool = False,
+    ) -> dict:
+        board = next((b for b in await self.boards() if b["id"] == str(board_id)), None)
+        if board is None:
+            return {"error": "board not found"}
+        today = self._today()
+        found = []
+        for item in await self.board_items(board):
+            item_status = _status_text(item)
+            item_group = (item.get("group") or {}).get("title") or ""
+            end = _due(item)
+            if status and item_status.strip().lower() != status.strip().lower():
+                continue
+            if group and group.strip().lower() not in item_group.lower():
+                continue
+            if person and not _assigned_to(item, person):
+                continue
+            if (open_only or late_only) and _finished(item):
+                continue
+            if late_only and not (end and end < today):
+                continue
+            entry = {"name": item["name"], "status": item_status, "group": item_group}
+            if end:
+                entry["due"] = end.isoformat()
+                if end < today and not _finished(item):
+                    entry["late_days"] = (today - end).days
+            people = _people_text(item)
+            if people:
+                entry["people"] = people
+            found.append(entry)
+        by_status: dict[str, int] = {}
+        by_group: dict[str, int] = {}
+        for entry in found:
+            by_status[entry["status"] or "-"] = by_status.get(entry["status"] or "-", 0) + 1
+            by_group[entry["group"]] = by_group.get(entry["group"], 0) + 1
+        return {
+            "board": board["name"],
+            "total": len(found),
+            "by_status": by_status,
+            "by_group": by_group,
+            "items": found[:PERSON_RESULT_LIMIT],
+        }
 
     async def _t_person_items(self, person: str) -> dict:
         today = self._today()
@@ -652,6 +723,13 @@ def _assigned_to(item: dict, person: str) -> bool:
     if people:
         return any(named(v["text"]) for v in people)
     return any(named(v["text"]) for v in values if v.get("type") == "dropdown")
+
+
+def _people_text(item: dict) -> str:
+    for v in item.get("column_values") or []:
+        if v.get("type") in ("people", "multiple-person") and v.get("text"):
+            return v["text"]
+    return ""
 
 
 def _status_text(item: dict) -> str:

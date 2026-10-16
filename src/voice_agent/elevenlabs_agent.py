@@ -303,11 +303,24 @@ def build_tts(settings: Settings) -> dict:
     return tts
 
 
-def asr_keywords(people: list[Person]) -> list[str]:
+# English Monday words callers mix into Arabic; without them the live recognizer writes
+# «الفستات» for "Tasks" and «منديا» for "Monday".
+MONDAY_WORDS = (
+    "Monday", "Tasks", "task", "board", "item", "update", "status", "priority", "group",
+    "pending", "in progress", "done", "ready", "ready for edit", "stuck", "resolved",
+    "waiting approval", "deadline", "timeline", "project", "projects", "invoice", "review",
+    "Request tasks", "Customer Projects", "Account Managers", "تاسك", "تاسكات",
+)  # fmt: skip
+MAX_ASR_KEYWORDS = 100
+
+
+def asr_keywords(people: list[Person], boards: list[str] | None = None) -> list[str]:
     words = {p.name_ar for p in people}
     for p in people:
         words.update(a for a in p.aliases if any("\u0600" <= ch <= "\u06ff" for ch in a))
-    return sorted(words | {"تاسك", "Monday", "مانداي"})
+    ordered = sorted(words) + list(MONDAY_WORDS) + list(boards or [])
+    unique = list(dict.fromkeys(w.strip() for w in ordered if w and w.strip()))
+    return unique[:MAX_ASR_KEYWORDS]
 
 
 def build_agent(
@@ -316,6 +329,7 @@ def build_agent(
     tool_ids: list[str],
     boards: BoardDirectory | None = None,
     monday_assistant: bool = False,
+    board_names: list[str] | None = None,
 ) -> dict:
     return {
         "name": f"{NAME_EN} ({NAME_AR}) - Waset Co task line",
@@ -372,7 +386,7 @@ def build_agent(
                 "provider": "scribe_realtime",
                 "quality": "high",
                 # bias recognition towards the team's names and the domain words
-                "keywords": asr_keywords(people),
+                "keywords": asr_keywords(people, board_names),
             },
         },
         # Only our bridge (with a signed URL from our API key) may start conversations.
@@ -442,6 +456,20 @@ class ElevenLabsAgentSync:
             raise RuntimeError(f"{method} {path} -> HTTP {response.status_code}: {response.text}")
         return response.json() if response.content else {}
 
+    async def monday_board_names(self) -> list[str]:
+        """Names of the Monday boards, as speech recognition keywords (best effort)."""
+        if not self.s.monday_api_token:
+            return []
+        from voice_agent.connectors.monday_api import MondayAPI, MondayAPIError, MondayTools
+
+        api = MondayAPI(self.s.monday_api_token, url=self.s.monday_api_url)
+        try:
+            return [b["name"] for b in await MondayTools(api).boards()]
+        except (MondayAPIError, KeyError):
+            return []
+        finally:
+            await api.aclose()
+
     def monday_assistant_enabled(self) -> bool:
         """Same conditions as the api's /agent/tools/monday_assistant endpoint."""
         s = self.s
@@ -497,6 +525,7 @@ class ElevenLabsAgentSync:
             [tool_ids[n] for n in tools],
             boards,
             monday_assistant=self.monday_assistant_enabled(),
+            board_names=await self.monday_board_names(),
         )
         agent_id = state.get("agent_id") or self.s.elevenlabs_agent_id
         if agent_id:

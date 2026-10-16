@@ -508,3 +508,26 @@ async def test_person_items_does_the_filtering_and_dates_itself():
     await tools.call("update_item", {"board_id": "1", "item_id": "1", "values": {}})
     await tools.call("person_items", {"person": "Michael Aziz"})
     assert sum("items_page" in r["query"] for r in seen[before:]) == 1  # only board 1 re-read
+
+
+def test_answers_are_made_speakable():
+    from voice_agent.agent_tools.monday_assistant import spoken
+
+    listed = 'فيه ١٦ تاسك. أهمهم:\n\n- **الكاميرات** (Critical)\n- "الكهربائي"\n1. الفيديو'
+    assert spoken(listed) == "فيه ١٦ تاسك. أهمهم، الكاميرات (Critical)، الكهربائي، الفيديو"
+    first = " ".join(["أول"] * 30) + "."
+    assert spoken(first + " " + " ".join(["كلمة"] * 80)) == f"{first} أكمل؟"  # sentence end
+    cut = spoken(" ".join(["كلمة"] * 80))
+    assert cut.endswith(". أكمل؟") and len(cut.split()) == 46  # no sentence end: 45 words
+    assert spoken("تمام، خليتها Done.") == "تمام، خليتها Done."
+
+
+def test_recognition_keywords_carry_monday_words_and_boards():
+    from voice_agent.elevenlabs_agent import MAX_ASR_KEYWORDS, asr_keywords
+
+    people = list(PeopleDirectory.load())
+    words = asr_keywords(
+        people, ["Customer Projects", "Ahmed Tasks", *[f"B{i}" for i in range(200)]]
+    )
+    assert {"Tasks", "pending", "in progress", "Monday", "Ahmed Tasks", "محمد"} <= set(words)
+    assert len(words) == MAX_ASR_KEYWORDS and len(set(words)) == len(words)
