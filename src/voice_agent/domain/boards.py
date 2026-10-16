@@ -30,6 +30,11 @@ class BoardSpec:
     assignee_column_type: str = "people"
     values: dict[str, Any] = field(default_factory=dict)  # fixed column values
     timeline_column: str = ""
+    due_column: str = ""  # a Date column for the deadline (when there is no timeline)
+
+    @property
+    def has_deadline(self) -> bool:
+        return bool(self.timeline_column or self.due_column)
 
 
 class BoardDirectory:

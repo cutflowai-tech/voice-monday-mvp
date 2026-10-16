@@ -91,7 +91,7 @@ def build_tools(
             "request_headers": headers,
             "request_body_schema": {
                 "type": "object",
-                "required": ["conversation_id", "assignee_key", "task", "mode"],
+                "required": ["conversation_id", "assignee_key", "task", "mode", "due"],
                 "properties": {
                     "conversation_id": conversation,
                     "caller_id": {"type": "string", "dynamic_variable": "caller_id"},
@@ -115,6 +115,15 @@ def build_tools(
                         "description": (
                             "new for a new task; replace_last when the caller corrects the "
                             "task you just repeated."
+                        ),
+                    },
+                    "due": {
+                        "type": "string",
+                        "description": (
+                            "When the task is due, in the caller's words: «النهارده»، «بكرة»، "
+                            '«يوم الخميس»، «الأسبوع الجاي»، «20 أكتوبر». "none" only if the '
+                            "caller said it has no deadline. If they didn't say when, ask "
+                            "them BEFORE calling."
                         ),
                     },
                     **(

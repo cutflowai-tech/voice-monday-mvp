@@ -93,9 +93,22 @@ How a board is chosen:
   first. The server enforces this: `submit_task` with `board=auto` for Amir returns
   `need_board` and saves nothing.
 
-New tasks on the Account Managers boards go to the **Ready To Start** group. The Timeline
-comes from the task's words (بكرة، بعد بكرة، النهارده، يوم الخميس…, in Cairo time), or
-today. People columns need Monday *user* ids (`monday_users`); Mohamed is Mohamed Mohsen.
+New tasks on the Account Managers boards go to the **Ready To Start** group.
+
+**Deadlines.** Every task gets a deadline. On Request tasks it goes in **Requested Date**
+(`due_column`); on the Account Managers boards it goes in the **Timeline**. If the caller
+didn't say when, Sarah asks «تسليمها إمتى؟» first. The server enforces this:
+`submit_task` without a date returns `need_due` and saves nothing.
+
+Supported wordings (Cairo time):
+- النهارده، بكرة، بعد بكرة
+- يوم الخميس
+- الأسبوع الجاي، آخر الأسبوع (= Thursday)
+- بعد يومين، بعد 3 أيام، بعد أسبوعين
+- الشهر الجاي
+- يوم 20، 20 أكتوبر، 20/10
+
+«مالهاش معاد» saves the task without a date (`due: "none"`). People columns need Monday *user* ids (`monday_users`); Mohamed is Mohamed Mohsen.
 
 ## Sounds
 

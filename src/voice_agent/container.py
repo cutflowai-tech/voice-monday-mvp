@@ -80,6 +80,7 @@ def board_targets(
             person_ids=dict(ids),
             values=dict(spec.values),
             timeline_column=spec.timeline_column,
+            due_column=spec.due_column,
         )
     return targets
 
@@ -100,6 +101,7 @@ def build_connectors(
             task_name_column=settings.monday_task_name_column,
             idempotency_column=settings.monday_idempotency_column,
             requester_column=settings.monday_requester_column,
+            due_column=boards.boards[boards.default].due_column,
             api_url=settings.monday_api_url,
             api_version=settings.monday_api_version,
             timeout_seconds=settings.monday_timeout_seconds,

@@ -145,9 +145,11 @@ async def test_named_board_creates_the_task_there_with_a_due_date(board_containe
 async def test_others_go_to_the_usual_board(board_container, worker):
     window = TaskWindow(board_container, grace_seconds=0.01, done_wait_seconds=1, poll_seconds=0.01)
     async with running_worker(worker):
-        result = await window.submit(conversation_id="c3", assignee_key="ahmed", task="يجيب الورق")
+        result = await window.submit(
+            conversation_id="c3", assignee_key="ahmed", task="يجيب الورق بكرة"
+        )
     assert result["status"] == "created" and result["board"] == "الريكويستس"
-    assert "due" not in result  # the usual board has no timeline column
+    assert result["due"] == board_container.mock.calls[-1]["due"]  # its Requested Date
     assert board_container.mock.calls[-1]["board"] is None
 
 
@@ -175,3 +177,68 @@ def test_sarah_knows_the_boards_and_asks_for_amir(boards):
     tools = build_tools(Settings(agent_public_url="https://x"), people, "sec", boards=boards)
     board = tools["submit_task"]["api_schema"]["request_body_schema"]["properties"]["board"]
     assert board["enum"] == ["auto", *boards_keys()]
+
+
+@pytest.mark.parametrize(
+    ("words", "expected"),
+    [
+        ("الأسبوع الجاي", dt.date(2026, 10, 22)),
+        ("آخر الأسبوع", THURSDAY),  # Thursday is the end of the work week
+        ("بعد يومين", dt.date(2026, 10, 17)),
+        ("بعد ٣ أيام", dt.date(2026, 10, 18)),
+        ("بعد تلات أيام", dt.date(2026, 10, 18)),
+        ("بعد أسبوعين", dt.date(2026, 10, 29)),
+        ("الشهر الجاي", dt.date(2026, 11, 15)),
+        ("يوم 20", dt.date(2026, 10, 20)),
+        ("يوم 3", dt.date(2026, 11, 3)),  # already past this month
+        ("20 أكتوبر", dt.date(2026, 10, 20)),
+        ("5 يناير", dt.date(2027, 1, 5)),
+        ("20/10", dt.date(2026, 10, 20)),
+        ("2026-12-01", dt.date(2026, 12, 1)),
+        ("مش عارف", None),
+    ],
+)
+def test_more_deadline_words(words, expected):
+    assert due_date(words, today=THURSDAY) == expected
+
+
+async def test_a_task_without_a_deadline_asks_for_one(board_container, worker):
+    window = TaskWindow(board_container, grace_seconds=0.01, done_wait_seconds=1, poll_seconds=0.01)
+    reply = await window.submit(conversation_id="d1", assignee_key="ahmed", task="يجيب الورق")
+    assert reply == {"status": "need_due", "assignee": "أحمد"}
+    assert board_container.store.status_counts() == {}  # nothing saved
+
+    bad = await window.submit(
+        conversation_id="d1", assignee_key="ahmed", task="يجيب الورق", due="مش عارف"
+    )
+    assert bad["status"] == "invalid" and bad["problem"].startswith("bad_due")
+
+    async with running_worker(worker):
+        result = await window.submit(
+            conversation_id="d1", assignee_key="ahmed", task="يجيب الورق", due="2026-10-20"
+        )
+        none = await window.submit(
+            conversation_id="d2", assignee_key="ahmed", task="يرتب المكتب", due="none"
+        )
+    assert result["status"] == "created" and result["due"] == "2026-10-20"
+    assert board_container.mock.calls[-2]["due"] == "2026-10-20"
+    assert none["status"] == "created" and "due" not in none
+
+
+def test_the_usual_board_gets_its_requested_date(boards):
+    seen = {}
+
+    def handler(request):
+        seen["variables"] = json.loads(request.content)["variables"]
+        return httpx.Response(200, json={"data": {"create_item": {"id": "7", "name": "x"}}})
+
+    config = MondayConfig(
+        api_token="t", board_id="5105567103", group_id="topics",
+        assignee_column="dropdown_mm7wmgq3", assignee_column_type="dropdown",
+        due_column=boards.boards["requests"].due_column,
+    )  # fmt: skip
+    connector = MondayGraphQLConnector(config, {"ziad": 5}, transport=httpx.MockTransport(handler))
+    values = connector.column_values(
+        title="x", person_id=5, idempotency_key="k", board="requests", due="2026-10-20"
+    )
+    assert values == {"dropdown_mm7wmgq3": {"ids": [5]}, "date_mm7wb1fz": {"date": "2026-10-20"}}

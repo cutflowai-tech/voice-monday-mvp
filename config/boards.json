@@ -3,7 +3,8 @@
   "boards": {
     "requests": {
       "name_ar": "الريكويستس",
-      "name_en": "Request tasks"
+      "name_en": "Request tasks",
+      "due_column": "date_mm7wb1fz"
     },
     "account_managers": {
       "name_ar": "الأكاونت مانجرز",

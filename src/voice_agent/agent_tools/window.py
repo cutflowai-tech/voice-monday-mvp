@@ -24,7 +24,7 @@ from typing import Any, Literal
 from voice_agent.agent_tools.task_text import normalize_task
 from voice_agent.container import Container
 from voice_agent.domain.boards import ASK, AUTO
-from voice_agent.domain.dates import due_date, today_in_cairo
+from voice_agent.domain.dates import NO_DEADLINE, due_date
 from voice_agent.domain.intents import Action, Intent, IntentDetails
 from voice_agent.jobs.models import JobStatus
 from voice_agent.logging_setup import get_logger
@@ -44,6 +44,7 @@ class Draft:
     caller_id: str | None
     created_at: float
     board: str = ""  # resolved board key ("" = the default board)
+    due: str | None = None  # deadline (ISO date) for the board's date/timeline column
     state: DraftState = "waiting"
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     result: asyncio.Future[dict[str, Any]] | None = None
@@ -90,7 +91,11 @@ class TaskWindow:
         mode: Mode = "new",
         caller_id: str | None = None,
         board: str = AUTO,
+        due: str | None = None,
     ) -> dict[str, Any]:
+        """``due``: the caller's words for the deadline («بكرة»، «يوم الخميس»، «20 أكتوبر»), or
+        "none" when they said there is none. Without it, the task's own words are used; if
+        they name no date either, nothing is saved and ``need_due`` asks the caller."""
         task = " ".join(task.split())
         boards = self.c.boards
         board = boards.resolve(assignee_key, board)
@@ -108,9 +113,16 @@ class TaskWindow:
         if problem:
             log.info("agent_tool.invalid", conversation_id=conversation_id, problem=problem)
             return {"status": "invalid", "problem": problem}
+        deadline = self._deadline(board, task, due)
+        if isinstance(deadline, dict):  # need_due / invalid
+            log.info("agent_tool.due", conversation_id=conversation_id, result=deadline["status"])
+            if deadline["status"] == "need_due":
+                person = self.c.directory.get(assignee_key)
+                deadline["assignee"] = person.name_ar if person else assignee_key
+            return deadline
 
         conv = self._conversation(conversation_id)
-        key = _draft_key(conversation_id, assignee_key, task, board)
+        key = _draft_key(conversation_id, assignee_key, task, board, deadline or "")
         existing = next((d for d in conv.drafts if d.key == key), None)
         if existing and existing.state in ("waiting", "committed") and existing.result:
             log.info("agent_tool.joined", conversation_id=conversation_id, key=key)
@@ -130,6 +142,7 @@ class TaskWindow:
             caller_id=caller_id,
             created_at=time.monotonic(),
             board=board,
+            due=deadline,
         )
         draft.result = asyncio.get_running_loop().create_future()
         conv.drafts.append(draft)
@@ -170,6 +183,28 @@ class TaskWindow:
             await asyncio.wait(self._tasks, timeout=self.done_wait_seconds + 5)
 
     # ------------------------------------------------------------------ internals
+    def _deadline(self, board: str, task: str, due: str | None) -> str | dict[str, Any] | None:
+        """ISO deadline, None (no deadline / board has no date column) or a reply dict."""
+        spec = self.c.boards.boards.get(board)
+        if spec is None or not spec.has_deadline:
+            return None
+        words = (due or "").strip()
+        if words.lower() in (NO_DEADLINE, "no", "لا", "مفيش"):
+            return None
+        parsed = due_date(words) if words else None
+        if parsed is None:
+            parsed = due_date(task)
+        if parsed is not None:
+            return parsed.isoformat()
+        if words:
+            return {
+                "status": "invalid",
+                "problem": (
+                    "bad_due: ask again when it's due, e.g. «بكرة»، «يوم الخميس»، «20 أكتوبر»"
+                ),
+            }
+        return {"status": "need_due"}
+
     def _validate(self, assignee_key: str, task: str, board: str = "") -> str | None:
         person = self.c.directory.get(assignee_key)
         if person is None:
@@ -264,10 +299,8 @@ class TaskWindow:
         spec = handler.build_job(intent)
         spec.payload["requester_key"] = requester_key
         spec.payload["board"] = draft.board
-        board_spec = self.c.boards.boards.get(draft.board)
-        due = None
-        if board_spec is not None and board_spec.timeline_column:
-            due = (due_date(draft.task) or today_in_cairo()).isoformat()
+        due = draft.due
+        if due:
             spec.payload["due"] = due
         metadata = intent.public_dict()
         metadata["requester"] = {"person_key": requester_key, "caller_number": draft.caller_id}
@@ -340,9 +373,12 @@ class TaskWindow:
         return conv
 
 
-def _draft_key(conversation_id: str, assignee_key: str, task: str, board: str = "") -> str:
-    """Same conversation + person + words + board = same draft (retries, double calls)."""
+def _draft_key(
+    conversation_id: str, assignee_key: str, task: str, board: str = "", due: str = ""
+) -> str:
+    """Same conversation + person + words + board + deadline = same draft (retries, double
+    calls); a corrected deadline is a different draft."""
     digest = hashlib.sha256(
-        f"{conversation_id}|{assignee_key}|{normalize_text(task)}|{board}".encode()
+        f"{conversation_id}|{assignee_key}|{normalize_text(task)}|{board}|{due}".encode()
     ).hexdigest()
     return f"el_{digest[:32]}"

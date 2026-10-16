@@ -111,6 +111,7 @@ class MondayConfig:
     task_name_column: str = "name"
     idempotency_column: str = ""
     requester_column: str = ""
+    due_column: str = ""  # Date column set from the task's deadline
     api_url: str = "https://api.monday.com/v2"
     api_version: str = "2026-07"
     timeout_seconds: float = 10.0
@@ -127,6 +128,7 @@ class BoardTarget:
     person_ids: dict[str, int]
     values: dict[str, Any] = field(default_factory=dict)  # fixed values, e.g. status index
     timeline_column: str = ""  # set from the task's due date when there is one
+    due_column: str = ""  # or a Date column
 
 
 class MondayConnector(Connector):
@@ -241,6 +243,8 @@ class MondayGraphQLConnector(MondayConnector):
             values: dict[str, Any] = {target.assignee_column: assignee, **target.values}
             if target.timeline_column and due:
                 values[target.timeline_column] = {"from": due, "to": due}
+            elif target.due_column and due:
+                values[target.due_column] = {"date": due}
             return values
         values = {self.config.assignee_column: assignee}
         if self.config.task_name_column and self.config.task_name_column != "name":
@@ -251,6 +255,8 @@ class MondayGraphQLConnector(MondayConnector):
             values[self.config.requester_column] = {
                 "personsAndTeams": [{"id": requester_id, "kind": "person"}]
             }
+        if self.config.due_column and due:
+            values[self.config.due_column] = {"date": due}
         return values
 
     def build_create_request(

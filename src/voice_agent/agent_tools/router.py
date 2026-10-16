@@ -27,6 +27,7 @@ class SubmitTaskRequest(BaseModel):
     mode: Literal["new", "replace_last"] = "new"
     caller_id: str | None = Field(default=None, max_length=64)
     board: str = Field(default="auto", pattern=r"^[a-z_]{1,40}$")
+    due: str | None = Field(default=None, max_length=80)
 
 
 class CancelLastRequest(BaseModel):
@@ -71,6 +72,7 @@ async def submit_task(
         mode=body.mode,
         caller_id=body.caller_id,
         board=body.board,
+        due=body.due,
     )
 
 
