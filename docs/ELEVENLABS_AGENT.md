@@ -110,6 +110,15 @@ Supported wordings (Cairo time):
 
 «مالهاش معاد» saves the task without a date (`due: "none"`). People columns need Monday *user* ids (`monday_users`); Mohamed is Mohamed Mohsen.
 
+## Who can call Sarah
+
+`EL_BRIDGE_ALLOWED_CALLERS=101,102,106` lists who reaches her: Mohamed, Ahmed and Michael.
+- Calls from any other extension or number are hung up by the bridge before ElevenLabs
+  connects, so no agent minutes are used. The dialplan then plays a busy tone.
+- Sarah's own outbound calls (pranks) are never blocked.
+- Leave it empty to let everyone through.
+- After changing it, restart `el-bridge`.
+
 ## Sounds
 
 | Variable | Default | What it does |

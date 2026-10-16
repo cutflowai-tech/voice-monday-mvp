@@ -154,6 +154,9 @@ class Settings(BaseSettings):
     # AudioSocket bridge (extension 778 -> 127.0.0.1:9019 -> ElevenLabs WebSocket)
     el_bridge_host: str = "127.0.0.1"
     el_bridge_port: int = Field(default=9019, ge=1, le=65535)
+    # Extensions/numbers whose calls Sarah answers (comma-separated); empty = everyone.
+    # Others get a busy tone. Sarah's own outbound calls are never blocked.
+    el_bridge_allowed_callers: str = ""
     # our own keyboard recording while a task is saved: 0 = off (ElevenLabs' tool call
     # sound plays instead), 1 = normal, 2 = loud
     el_bridge_typing_volume: float = Field(default=0.0, ge=0, le=3)
@@ -175,6 +178,9 @@ class Settings(BaseSettings):
     @property
     def sqlite_path(self) -> Path:
         return sqlite_path_from_url(self.database_url)
+
+    def sarah_allowed_callers(self) -> set[str]:
+        return {c.strip() for c in self.el_bridge_allowed_callers.split(",") if c.strip()}
 
     def monday_assistant_allowed(self) -> set[str]:
         return {k.strip().lower() for k in self.monday_assistant_callers.split(",") if k.strip()}

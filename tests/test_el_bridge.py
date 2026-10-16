@@ -296,3 +296,35 @@ async def test_typing_plays_only_while_saving_and_ducks_under_her_voice():
     frames = [p for kind, p in call.writer.frames() if kind == 0x10]
     assert any(p != bytes(320) for p in frames[:3])  # typing while saving
     assert all(p == bytes(320) for p in frames[-2:])  # silence afterwards
+
+
+async def test_only_listed_extensions_reach_sarah():
+    bridge = ElevenLabsBridge(
+        api_key="k",
+        agent_id="a",
+        base_url="https://x",
+        host="127.0.0.1",
+        port=0,
+        allowed_callers={"101", "102", "106"},
+    )
+    stranger = uuid.UUID("3f2a9c1e-7b4d-4e8a-9c21-000000000104").bytes
+    assert bridge.allows("101", b"x") and bridge.allows("106", b"x")
+    assert not bridge.allows("104", stranger) and not bridge.allows(None, stranger)
+    bridge.pending_outbound[stranger] = (0.0, object())  # Sarah calling 104 herself
+    assert bridge.allows("104", stranger)
+    everyone = ElevenLabsBridge(api_key="k", agent_id="a", base_url="https://x", host="h", port=0)
+    assert everyone.allows("104", stranger)
+
+    reader = asyncio.StreamReader()
+    reader.feed_data(frame(KIND_UUID, uuid.UUID("3f2a9c1e-7b4d-4e8a-9c21-000000000105").bytes))
+    writer = FakeWriter()
+    opened = []
+
+    async def open_agent(*args):
+        opened.append(args)
+
+    await BridgeCall(reader, writer, open_agent=open_agent, allow=bridge.allows).run()
+    assert opened == []  # no ElevenLabs minutes spent
+    assert writer.frames() == [(KIND_HANGUP, b"")] and writer.closed
+    await bridge._client.aclose()
+    await everyone._client.aclose()

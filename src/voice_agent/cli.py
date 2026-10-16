@@ -358,6 +358,7 @@ def cmd_el_bridge(args: argparse.Namespace, settings: Settings) -> int:
             punchline_dir="data/prank",
             voice_id=settings.elevenlabs_agent_voice_id,
             identify=identify,
+            allowed_callers=settings.sarah_allowed_callers(),
             typing_volume=settings.el_bridge_typing_volume,
             api_key=settings.elevenlabs_api_key,
             agent_id=agent_id,

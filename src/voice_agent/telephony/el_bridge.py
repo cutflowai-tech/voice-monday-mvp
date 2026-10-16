@@ -37,6 +37,7 @@ from typing import Any
 import httpx
 
 from voice_agent.agent_tools.activity import is_speech
+from voice_agent.domain.callers import normalize_caller
 from voice_agent.logging_setup import get_logger
 from voice_agent.sarah import (
     UNKNOWN_CALLER,
@@ -184,9 +185,11 @@ class BridgeCall:
         is_saving=None,
         typing_volume: float = 1.0,
         limit_for=None,
+        allow=None,
         punchline_for=None,
     ):
         self.limit_for = limit_for  # (uuid bytes) -> max seconds for this call, or None
+        self.allow = allow  # (caller, uuid bytes) -> may this call reach Sarah?
         self.punchline_for = punchline_for  # (uuid bytes) -> 16 kHz PCM clip, or None
         self.punchline: bytes | None = None
         self.muted = False  # after the punchline starts, the agent's own audio is dropped
@@ -227,6 +230,14 @@ class BridgeCall:
             raise ValueError(f"expected UUID first, got type {kind:#x}")
         self.call_uuid = payload
         self.caller = caller_from_uuid(payload)
+        if self.allow is not None and not self.allow(self.caller, payload):
+            # hang up before any agent minutes are used; the dialplan plays a busy tone
+            log.info("el_bridge.caller_refused", caller=self.caller)
+            self.writer.write(frame(KIND_HANGUP))
+            with contextlib.suppress(Exception):
+                await self.writer.drain()
+                self.writer.close()
+            return
         limit = self.limit_for(payload) if self.limit_for else None
         # AudioSocket hangs up after 2 s without data from us: stream (silence) from now on.
         pacer = asyncio.create_task(self._pace_playback())
@@ -494,7 +505,10 @@ class ElevenLabsBridge:
         outbound_caller_id: str = "Sarah <777>",
         punchline_dir: str | None = None,
         voice_id: str = "",
+        allowed_callers: set[str] | None = None,
     ):
+        # inbound callers who may reach Sarah (normalized numbers); empty/None = everyone
+        self.allowed_callers = {normalize_caller(c) for c in allowed_callers or ()}
         self.punchline_dir = punchline_dir
         self.voice_id = voice_id
         self.punchlines: dict[bytes, bytes] = {}
@@ -657,6 +671,12 @@ class ElevenLabsBridge:
             if request is not None:
                 await self.place_call(request)
 
+    def allows(self, caller: str | None, call_uuid: bytes) -> bool:
+        """Sarah's own outbound calls always connect; inbound ones only from the list."""
+        if not self.allowed_callers or call_uuid in self.pending_outbound:
+            return True
+        return normalize_caller(caller or "") in self.allowed_callers
+
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()
         if task:
@@ -667,6 +687,7 @@ class ElevenLabsBridge:
                 writer,
                 open_agent=self.open_agent,
                 limit_for=self.limit_for,
+                allow=self.allows,
                 punchline_for=self.punchline_for,
                 on_speech=self.activity.mark if self.activity else None,
                 is_saving=self.activity.is_saving if self.activity else None,
